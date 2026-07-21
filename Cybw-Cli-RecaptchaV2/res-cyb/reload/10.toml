@@ -1,0 +1,7 @@
+[Css]
+target = 'button#recaptcha-reload-button'
+pierce = true
+
+[[Css.iframe]]
+url_needles = ["api2/bframe"]
+

@@ -1,0 +1,2 @@
+[Css]
+target = '#rso[data-async-context^="query:"] > div > div'

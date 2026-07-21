@@ -1,0 +1,4 @@
+# iframe api2/anchor (machinerie du widget) présente dans le DOM top =
+# reCAPTCHA invisible chargé et execute() prêt. C'est l'élément, pas son contenu.
+[Css]
+target = 'iframe[src*="api2/anchor"]'

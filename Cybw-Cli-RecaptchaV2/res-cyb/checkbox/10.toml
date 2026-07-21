@@ -1,0 +1,11 @@
+# Checkbox officielle « I'm not a robot » du reCAPTCHA v2 EXPLICITE, dans
+# l'iframe api2/anchor. Entrée du mode normal. aria-checked="false" = PAS encore
+# cochée (avant succès) -> on ne (re)tape que si le pass n'a pas déjà été accordé.
+# Sélecteur standard du widget reCAPTCHA (#recaptcha-anchor = div[role=checkbox]) ;
+# à valider sur cible réelle.
+[Css]
+target = '#recaptcha-anchor[aria-checked="false"]'
+pierce = true
+
+[[Css.iframe]]
+url_needles = ["api2/anchor"]

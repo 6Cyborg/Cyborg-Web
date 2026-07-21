@@ -1,0 +1,10 @@
+# Secrets et état runtime gérés hors-repo.
+cfg-tunnel.json
+pool-tunnels/
+pool-accounts/
+
+# Artefact de packaging du testpkg (zippé à chaque démarrage de cell.fish).
+dist.zip
+
+# oee
+run_archives

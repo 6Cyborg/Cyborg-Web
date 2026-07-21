@@ -1,0 +1,6 @@
+[Css]
+target = 'input[type="checkbox"]'
+pierce = true
+
+[[Css.iframe]]
+url_needles = ["3x00000000000000000000FF"]

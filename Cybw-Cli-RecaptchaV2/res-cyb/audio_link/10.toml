@@ -1,0 +1,6 @@
+[Css]
+target = '.rc-audiochallenge-tdownload > a[href]'
+pierce = true
+
+[[Css.iframe]]
+url_needles = ["api2/bframe"]

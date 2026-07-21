@@ -1,0 +1,10 @@
+[Css]
+target = '.rc-doscaptcha-header-text'
+pierce = true
+
+[[Css.iframe]]
+url_needles = ["recaptcha/api2/bframe"]
+
+[[Css.iframe]]
+url_needles = ["recaptcha/enterprise/bframe"]
+

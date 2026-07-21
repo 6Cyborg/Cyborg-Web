@@ -1,0 +1,8 @@
+# L'élément existe en permanence mais caché (style="display:none") ; il n'a
+# style="" (visible) + un texte que lorsque la réponse soumise est rejetée.
+[Css]
+target = '.rc-audiochallenge-error-message:not([style*="display:none"])'
+pierce = true
+
+[[Css.iframe]]
+url_needles = ["api2/bframe"]

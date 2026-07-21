@@ -1,0 +1,6 @@
+[Css]
+target = '#recaptcha-audio-button'
+pierce = true
+
+[[Css.iframe]]
+url_needles = ["api2/bframe"]

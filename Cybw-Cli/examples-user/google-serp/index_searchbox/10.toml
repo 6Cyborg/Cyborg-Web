@@ -1,0 +1,2 @@
+[Css]
+target = 'form[action="/search"] textarea[name="q"]'

@@ -1,0 +1,15 @@
+#!/usr/bin/env fish
+
+# Entrypoint cyborg qui remplace les fonctions.
+
+set -l cgi (status dirname)/../cgi
+switch $argv[1]
+    case net visit js query tap select input snap cookie css all none race auto export-profile set-profile
+        $cgi/$argv[1].fish $argv[2..-1]
+    case ''
+        echo "usage: cyb <net|visit|js|query|tap|select|input|snap|cookie|css|all|none|race|auto|export-profile|set-profile> [args…]" >&2
+        exit 2
+    case '*'
+        echo "cyb: commande inconnue: $argv[1]" >&2
+        exit 2
+end

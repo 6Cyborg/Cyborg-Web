@@ -1,0 +1,69 @@
+version: 0.1
+
+# `android_test_host` permet d'utilisé le "new host" DeviceFarm.
+android_test_host: amazon_linux_2
+
+phases:
+  install:
+    commands:
+      - echo testspec stderr >&2
+
+      # Pinne les versions récentes (sinon défaut = vieilles versions)
+      - devicefarm-cli use python 3.11
+      - devicefarm-cli use appium 2
+
+      # Drop binaires:
+      - mkdir -p /tmp/bin
+
+      # DROP 'uv' (runtime Python : cyborg_server.py + automation/chrome.py,
+      # deps inline PEP 723 résolues au lancement).
+      - wget -q https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz -O /tmp/uv.tar.gz
+      - tar -xzf /tmp/uv.tar.gz -C /tmp
+      - mv /tmp/uv-x86_64-unknown-linux-gnu/uv /tmp/bin/uv
+
+      # DROP 'cloudflared'
+      - wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /tmp/bin/cloudflared
+      - chmod +x /tmp/bin/cloudflared
+
+      # DROP 'caddy' (reverse proxy seul : /cyborg/* → serveur Python :9224).
+      - wget -q https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz -O /tmp/caddy.tar.gz
+      - tar -xzf /tmp/caddy.tar.gz -C /tmp/bin caddy
+
+      # DROP 'fish'
+      # fish 4.6.0 - l'archive contient le binaire seul.
+      - wget -q https://github.com/fish-shell/fish-shell/releases/download/4.6.0/fish-4.6.0-linux-x86_64.tar.xz -O /tmp/fish.tar.xz
+      - tar -xJf /tmp/fish.tar.xz -C /tmp/bin
+
+      # DROP 'rg'
+      # ripgrep 14.1.1 - l'archive contient un dossier avec les licenses etc en plus du binaire
+      - wget -q https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz -O /tmp/rg.tar.gz
+      - tar -xzf /tmp/rg.tar.gz -C /tmp
+      - mv /tmp/ripgrep-14.1.1-x86_64-unknown-linux-musl/rg /tmp/bin/rg
+
+      # DROP 'gost' (forward proxy Go static, remplace squid)
+      - wget -q https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_amd64.tar.gz -O /tmp/gost.tar.gz
+      - tar -xzf /tmp/gost.tar.gz -C /tmp/bin gost
+      
+      # DROP 'busybox' (httpd CGI minimal pour /cell-api/*, derrière caddy).
+      - wget -q https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-x86_64 -O /tmp/bin/busybox
+      - chmod +x /tmp/bin/busybox
+
+
+  pre_test:
+    commands:
+      - adb devices
+
+  test:
+    commands:
+      # Seed:
+      - export CF_TUNNEL_HOSTNAME={{CF_TUNNEL_HOSTNAME}}
+      - export CF_TUNNEL_ID={{CF_TUNNEL_ID}}
+      - export CF_TUNNEL_SECRET={{CF_TUNNEL_SECRET}}
+      - export CF_ACCOUNT_ID={{CF_ACCOUNT_ID}}
+
+      - PATH=/tmp/bin:$PATH ./setup.fish
+
+  post_test:
+    commands:
+      # pas de post_test car `stop-run` ne le trigger pas de toute façon
+      - echo post_test triggered

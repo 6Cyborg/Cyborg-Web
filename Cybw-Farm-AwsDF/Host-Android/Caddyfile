@@ -1,0 +1,44 @@
+{
+	auto_https off
+	admin off
+}
+
+:9223 {
+	handle /host-android/probe-caddy {
+		respond "Caddy has health"
+	}
+	
+	handle /host-android/probe-busybox {
+		rewrite * /cgi/health-check.fish
+		reverse_proxy 127.0.0.1:9225
+	}
+
+	handle /host-android/apply-provision {
+		rewrite * /cgi/apply-config.fish
+		reverse_proxy 127.0.0.1:9225
+	}
+
+	# Reverse proxy vers ./cyborg_server.py
+	handle_path /cyborg/* {
+		reverse_proxy 127.0.0.1:9224
+	}
+
+	# Debug live : expose le CDP brut du device pour brancher un frontend DevTools (screencast + clic).
+	handle_path /cdp/* {
+		reverse_proxy 127.0.0.1:{$CDP_PORT} {
+			header_up Host {upstream_hostport}
+			header_up -Origin
+		}
+	}
+
+	# Sert le frontend DevTools en same-origin : sa CSP n'autorise la wss que vers 'self'.
+	handle_path /devtools/* {
+		reverse_proxy https://chrome-devtools-frontend.appspot.com {
+			header_up Host chrome-devtools-frontend.appspot.com
+		}
+	}
+
+	handle {
+		respond "forbidden nigga" 403
+	}
+}

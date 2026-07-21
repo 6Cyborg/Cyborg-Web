@@ -1,0 +1,10 @@
+# État « validé » du reCAPTCHA v2 EXPLICITE : la checkbox passe à
+# aria-checked="true" (coche verte) une fois le challenge résolu OU le pass
+# silencieux accordé. Sortie du mode normal. C'est la checkbox -> iframe
+# api2/anchor (PAS le popup api2/bframe).
+[Css]
+target = '#recaptcha-anchor[aria-checked="true"]'
+pierce = true
+
+[[Css.iframe]]
+url_needles = ["api2/anchor"]

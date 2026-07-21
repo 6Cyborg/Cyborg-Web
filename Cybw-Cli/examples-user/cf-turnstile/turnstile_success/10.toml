@@ -1,0 +1,7 @@
+[Css]
+target = '[role="alert"][style*="grid"] > span'
+pierce = true
+exact_text = "Success!"
+
+[[Css.iframe]]
+url_needles = ["3x00000000000000000000FF"]
