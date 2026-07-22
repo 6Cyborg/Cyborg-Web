@@ -10,7 +10,7 @@
 # NOTE : ni Chrome ni le serveur cyborg ne sont up à ce stade. C'est le premier
 # `POST /host-android/apply-provision` (déclenché par cyb-awsdf-launch) qui
 # orchestre gost + locale + `pm clear chrome` + first-run + `adb forward` puis
-# spawn le `.py` cyborg (Cybw-Runtime-CDP, à la racine du zip). Tant
+# spawn le `.py` cyborg (Cybw-RT-CDP, à la racine du zip). Tant
 # qu'apply-provision n'a pas tourné, `/cyborg/*` renvoie 502.
 #
 # Invariant client : `endpoint_url=<URL>` apparu dans TESTSPEC_OUTPUT ⇒

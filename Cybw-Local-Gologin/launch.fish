@@ -161,7 +161,7 @@ or return (llerr -e1 "Gologin n'a pas été prêt")
 
 # === Démarrage de Cyborg
 
-set -l runtime $script_dir/../Cybw-Runtime-CDP/cyborg_server.py
+set -l runtime $script_dir/../Cybw-RT-CDP/cyborg_server.py
 set -l rt_log $ddir/cyb-runtime-cdp.log
 set -l rt_url http://127.0.0.1:9224
 llwait "lancement de Cyborg"

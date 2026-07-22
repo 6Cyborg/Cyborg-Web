@@ -106,12 +106,6 @@ function check_app_field -a file actual
     or llwar "mismatch $label : $(llcode $actual) au lieu de $(llcode $expected)"
 end
 
-# Home du client `cyb` : $CYB_HOME s'il est exporté (cyb-activate.fish via
-# conf.d), sinon le repo sibling Cybw-Client (même hypothèse que l'étape zip).
-set -gx cyb_client_home (set -q CYB_HOME; and echo $CYB_HOME; or path resolve -- $CYBAWSDF_HOME/../../Cybw-Client)
-test -x $cyb_client_home/bin/cyb
-or return (llerr -e2 "client cybw introuvable : $cyb_client_home/bin/cyb")
-
 # ── Compte AWS (exporté : le teardown au fish_exit en a besoin) ─────────────────
 test -n "$account_file" -a -f "$account_file"
 and set -gx AWS_DEFAULT_REGION us-west-2
@@ -169,7 +163,7 @@ function _cybawsdf_launch_exit --on-event fish_exit
     if test -n "$cyb_profile_state" -a -n "$CYB_URL"
         llwait "sauvegarde finale du profil"
         set -l tmp (mktemp (path dirname -- $cyb_profile_state)/.state.XXXXXX)
-        if fish -c "cd $cyb_client_home; and bin/cyb export-profile $tmp" >/dev/null 2>&1
+        if fish -c "cd $CYB_HOME; and bin/cyb export-profile $tmp" >/dev/null 2>&1
             mv -f $tmp $cyb_profile_state
             and llinf "profil sauvé → $(llcode $cyb_profile_state)"
         else
@@ -251,9 +245,9 @@ or return (llerr -e4 "upload testspec échoué [$status]")
 llinf "testspec: $(llcode $CYB_TESTSPEC_ANDROID)"
 
 # zip dans un sous-shell : ne bouge pas notre CWD ($host_dir est absolu).
-# La runtime CDP (Cybw-Runtime-CDP, repo sibling) est ajoutée à la racine du
+# La runtime CDP (Cybw-RT-CDP, repo sibling) est ajoutée à la racine du
 # zip (-j junk paths) : layout on-device inchangé, `./cyborg_server.py`.
-fish -c "cd $host_dir; and zip -qr dist.zip * -x 'node_modules/*' dist.zip; and zip -qj dist.zip ../../Cybw-Runtime-CDP/*.py"
+fish -c "cd $host_dir; and zip -qr dist.zip * -x 'node_modules/*' dist.zip; and zip -qj dist.zip ../../Cybw-RT-CDP/*.py"
 or return (llerr -e4 "zip testpkg échoué [$status]")
 set -gx CYB_TESTPKG_ANDROID ($CYBAWSDF_HOME/lib/devicefarm_upload.fish --project-arn $CYB_PROJECT --name android-testpkg.zip \
     --type APPIUM_NODE_TEST_PACKAGE --content-type application/zip <$host_dir/dist.zip)
@@ -309,7 +303,7 @@ jq -n --arg ts $now --arg device "$device_slug" --arg proxy "$proxy" \
 # CWD) ; CYB_URL / CYB_DIR (-gx) sont hérités par le `fish -c` enfant.
 if test -f $cyb_profile_state
     llwait "restauration du profil ($(llcode $cyb_profile_state))"
-    fish -c "cd $cyb_client_home; and bin/cyb set-profile $cyb_profile_state" >/dev/null 2>&1
+    fish -c "cd $CYB_HOME; and bin/cyb set-profile $cyb_profile_state" >/dev/null 2>&1
     and llinf "profil restauré"
     or llwar "restore profil échoué — session neuve [$status]"
 else
@@ -318,7 +312,7 @@ end
 
 # Saver périodique (~60s) : lib/profile_saver.fish est un exécutable DÉDIÉ
 # (backgroundé ⇒ $last_pid killable au fish_exit) qui hérite CYB_URL / CYB_DIR.
-$CYBAWSDF_HOME/lib/profile_saver.fish $cyb_client_home $cyb_profile_state &
+$CYBAWSDF_HOME/lib/profile_saver.fish $CYB_HOME $cyb_profile_state &
 set -gx cyb_saver_pid $last_pid
 disown 2>/dev/null
 
