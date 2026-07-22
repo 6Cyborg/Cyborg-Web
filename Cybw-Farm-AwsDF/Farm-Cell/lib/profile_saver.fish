@@ -31,7 +31,7 @@ cd $client_home; or exit (llerr -e1 "client home introuvable: $(llcode $client_h
 # la session meurt avant l'intervalle.
 while true
     set -l tmp (mktemp (path dirname -- $dest)/.state.XXXXXX)
-    if bin/cyb export-profile $tmp >/dev/null 2>&1
+    if bin/cybw export-profile $tmp >/dev/null 2>&1
         mv -f $tmp $dest
     else
         rm -f $tmp

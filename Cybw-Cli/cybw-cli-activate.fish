@@ -11,7 +11,7 @@ set -a PATH $CYB_HOME/bin
 set -a fish_complete_path $CYB_HOME/completions
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Cyb Transport — lib commune des commandes `cyb <sub>`.
+# Cyb Transport — lib commune des commandes `cybw <sub>`.
 #
 # Modèle façon curl : __cyb_op_init crée le handle (dans l'env → un seul handle
 # par shell), on stage le contenu dans $_CYB_REQ, puis _cyb_op exécute.

@@ -6,7 +6,7 @@ set -lx log_registry CybRecapV2
 set -l CYB_RV2_HOME (status filename | path resolve | path dirname)
 set -l ct $CYB_RV2_HOME/res-cyb
 
-# ENTRÉE : coche la checkbox officielle (cyb tap n'attend pas -> `all` d'abord).
+# ENTRÉE : coche la checkbox officielle (cybw tap n'attend pas -> `all` d'abord).
 cybw all $ct/checkbox; or exit 1
 cybw tap $ct/checkbox
 

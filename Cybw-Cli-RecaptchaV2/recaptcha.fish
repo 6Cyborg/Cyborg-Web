@@ -37,7 +37,7 @@ function _transcribe -a url
     return 0
 end
 
-set -l start_race (cyb race -V $ct/nav_audio $outcomes)
+set -l start_race (cybw race -V $ct/nav_audio $outcomes)
 switch $start_race[1]
     case $ct/nav_audio
         llinf "Recaptcha V2 popup ouvert"
@@ -51,7 +51,7 @@ end
 
 llwait "Sélection du mode audio"
 cybw tap $ct/nav_audio
-set -l audio_race (cyb race $ct/audio_link $ct/audio_refusal)
+set -l audio_race (cybw race $ct/audio_link $ct/audio_refusal)
 switch $audio_race[1]
     case $ct/audio_link
         llinf "Mode audio autorisé"
@@ -69,7 +69,7 @@ for attempt in (seq 15)
 
     sleep 1
 
-    set -l audio_btn (cyb query -V $ct/audio_link)
+    set -l audio_btn (cybw query -V $ct/audio_link)
     set -l audio_url (pup '[href]' 'attr{href}' <$audio_btn/html | string replace -a '&amp;' '&')
 
     set -l audio_url ()
@@ -90,7 +90,7 @@ for attempt in (seq 15)
     cybw tap $ct/submit
 
     # TODO : erreur de traduction
-    set -l end_race (cyb race -V $ct/audio_bad $outcomes)
+    set -l end_race (cybw race -V $ct/audio_bad $outcomes)
     switch $end_race[1]
         case $ct/audio_bad
             llwar "Transcription mauvaise : $(llcode (cat $end_race[2]/text))"

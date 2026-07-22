@@ -8,10 +8,10 @@
 # (~512 o/entrée + padding + le targ). POST /fill.
 
 # Met un nombre ou du texte :
-# `cyb input --text "" <targ>`
+# `cybw input --text "" <targ>`
 #
 # Upload un ou plusieurs fichiers :
-# `cyb input --file a --file b <targ>`
+# `cybw input --file a --file b <targ>`
 
 set -lx log_registry CybSet
 __cyb_op_init; or exit 1

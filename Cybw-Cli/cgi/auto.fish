@@ -5,8 +5,8 @@
 #   cybw auto targs/cookie-accept ./dismiss-cookies.fish   # traite une fois puis sort
 #   cybw auto -m0 targs/chatbox    ./close-chat.fish       # persistant : ré-arme sans fin
 #
-# Boucle : attend la PRÉSENCE du targ (cyb all), lance $cgi (qui fait le/les
-# clic(s)), puis attend sa DISPARITION (cyb none) — et recommence. Le cybw none
+# Boucle : attend la PRÉSENCE du targ (cybw all), lance $cgi (qui fait le/les
+# clic(s)), puis attend sa DISPARITION (cybw none) — et recommence. Le cybw none
 # avant de reboucler garantit qu'on ne re-traite pas tant que le targ n'a pas
 # disparu puis réapparu. S'arrête après --limit traitements (défaut 1 ; 0 = illimité).
 set -lx log_registry CybAuto

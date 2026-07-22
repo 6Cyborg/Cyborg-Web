@@ -163,7 +163,7 @@ function _cybawsdf_launch_exit --on-event fish_exit
     if test -n "$cyb_profile_state" -a -n "$CYB_URL"
         llwait "sauvegarde finale du profil"
         set -l tmp (mktemp (path dirname -- $cyb_profile_state)/.state.XXXXXX)
-        if fish -c "cd $CYB_HOME; and bin/cyb export-profile $tmp" >/dev/null 2>&1
+        if fish -c "cd $CYB_HOME; and bin/cybw export-profile $tmp" >/dev/null 2>&1
             mv -f $tmp $cyb_profile_state
             and llinf "profil sauvé → $(llcode $cyb_profile_state)"
         else
@@ -303,7 +303,7 @@ jq -n --arg ts $now --arg device "$device_slug" --arg proxy "$proxy" \
 # CWD) ; CYB_URL / CYB_DIR (-gx) sont hérités par le `fish -c` enfant.
 if test -f $cyb_profile_state
     llwait "restauration du profil ($(llcode $cyb_profile_state))"
-    fish -c "cd $CYB_HOME; and bin/cyb set-profile $cyb_profile_state" >/dev/null 2>&1
+    fish -c "cd $CYB_HOME; and bin/cybw set-profile $cyb_profile_state" >/dev/null 2>&1
     and llinf "profil restauré"
     or llwar "restore profil échoué — session neuve [$status]"
 else

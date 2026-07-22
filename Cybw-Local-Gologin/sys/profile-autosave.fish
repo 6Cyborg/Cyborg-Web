@@ -1,5 +1,5 @@
 #!/usr/bin/env fish
-# Fonction périodique pour `cyb export-profile`
+# Fonction périodique pour `cybw export-profile`
 
 set -lx log_registry CybGologinSaver
 
