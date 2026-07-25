@@ -6,8 +6,8 @@ __cyb_op_init; or exit 1
 argparse v/verbose -- $argv; or exit (llerr -e2 "bad usage")
 
 
-_cyb_op snap 2>$_CYB_ERR
-or exit (llerr -e1 "op failed: $(llcode (cat $_CYB_ERR))")
+_cyb_op snap 2>$_CYBW_ERR
+or exit (llerr -e1 "op failed: $(llcode (cat $_CYBW_ERR))")
 
 # NNNN alloué atomiquement (mkdir échoue si déjà pris → pas de race entre snaps //)
 mkdir -p $CYB_DIR/snaps
@@ -18,8 +18,8 @@ while true
     mkdir $snap_dir 2>/dev/null; and break
     set n (math $n + 1)
 end
-mv $_CYB_RESP/* $snap_dir/
+mv $_CYBW_RESP/* $snap_dir/
 
 set -q _flag_verbose; and echo $snap_dir
-set -q CYBTRACE; and llinf "snappé $(llcode $snap_dir)"
+set -q CYBW_TRACE; and llinf "snappé $(llcode $snap_dir)"
 exit 0

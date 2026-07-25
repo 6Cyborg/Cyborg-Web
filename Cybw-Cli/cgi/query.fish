@@ -1,39 +1,37 @@
 #!/usr/bin/env fish
-# matche un/plusieurs targ dirs ; émet les paths des hits. POST /query.
-# -V/--visible : ne matche que les éléments VISIBLES (défaut : attached = présent
-# dans le DOM). Le daemon exige toujours un fichier `mode`.
+# multi-querySelectorAll basique. 
+# cybw query [-m N] [-o items|root] -- ...
 set -lx log_registry CybQuery
+source ./lib/transport.fish
+source ./lib/argparse_selectors.fish
+
+argparse 'm/max=' 'o/output=' -- $argv; or exit (llerr -e2 "bad usage")
+set -q argv[1]; or exit (llerr -e2 "no selector")
+
+set -q _flag_max; or set _flag_max 0
+set -q _flag_output; or set _flag_output items
+
 __cyb_op_init; or exit 1
 
-argparse -N1 "m/max=" "o/output=" "V/visible" -- $argv; or exit (llerr -e2 "bad usage")
+echo $_flag_max >$_CYBW_REQ/max
 
-set -q _flag_max
-or set _flag_max 0
-
-set -q _flag_output
-or set _flag_output items
-
-cp -r $argv $_CYB_REQ/
-echo $_flag_max >$_CYB_REQ/max
-if set -q _flag_visible
-    echo visible >$_CYB_REQ/mode
-else
-    echo attached >$_CYB_REQ/mode
+set -l idx 0
+for contents in (argparse_selectors $argv)
+    set idx (math $idx + 1)
+    echo $contents > $_CYBW_REQ/$idx.json
 end
 
-_cyb_op query 2>$_CYB_ERR
-or exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYB_ERR))")
-
-set -l save $_CYB_RESP
+_cyb_op query >$_CYBW_ERR
+or exit (llerr -e1 "error: $(llcode (cat $_CYBW_ERR))")
 
 switch $_flag_output
     case items
-        path resolve -- $save/*/*
+        path filter -- $_CYBW_RESP/*/*
     case root
-        path resolve -- $save
+        path filter -- $_CYBW_RESP
     case '*'
         exit (llerr -e1 "unknown output : $(llcode $_flag_output)")
 end
 
-set -q CYBTRACE; and llinf "queried $(llcode $argv)"
+set -q CYBW_TRACE; and llinf "queried $idx selector(s)"
 exit 0

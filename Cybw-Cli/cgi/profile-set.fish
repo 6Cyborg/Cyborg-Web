@@ -9,11 +9,11 @@ set -l src $argv[1]
 test -f $src; or exit (llerr -e2 "fichier introuvable: $(llcode $src)")
 
 # Le contenu du profil (cookies.json + storage/) devient le tar de requête.
-tar -xf $src -C $_CYB_REQ
+tar -xf $src -C $_CYBW_REQ
 or exit (llerr -e1 "extraction $(llcode $src) échouée [$status]")
 
-_cyb_op set-profile 2>$_CYB_ERR
-or exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYB_ERR))")
+_cyb_op set-profile 2>$_CYBW_ERR
+or exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYBW_ERR))")
 
-set -q CYBTRACE; and llinf "profil restauré depuis $(llcode $src)"
+set -q CYBW_TRACE; and llinf "profil restauré depuis $(llcode $src)"
 exit 0

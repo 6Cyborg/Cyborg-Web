@@ -1,38 +1,33 @@
 #!/usr/bin/env fish
-# attend que tous les sélecteurs matchent au moins un élément.
-#   cybw all targs/monsite.fr_*
-#   cybw tap targs/monsite.fr_bet
+# attend que TOUS les sélecteurs matchent au moins un élément.
+#   cybw all [-s] [-T N] -- -e 'a' -- -e 'b'
+# Délègue à `cybw query` (sous-process) ; pas de staging direct ici.
 set -lx log_registry CybAll
-__cyb_op_init; or exit 1
+source ./lib/retry.fish
 
-argparse -N1 "s/silent" "T/timeout=" "V/visible" -- $argv; or exit (llerr -e2 "bad usage")
+argparse 's/silent' 'T/timeout=' -- $argv
+or exit (llerr -e2 "bad usage")
 
-set -l vflag  # -V propagé à chaque `cybw query`
-if set -q _flag_visible
-    set vflag -V
+set -q _flag_timeout; and set -g cyb_retry_T $_flag_timeout; or set -g cyb_retry_T 60
+set -q _flag_silent; and set -g cyb_retry_s 1
+
+# nombre de sélecteurs attendus = (# de `--` restants) + 1.
+set -l seps 0
+for a in $argv
+    test "$a" = --; and set seps (math $seps + 1)
 end
-
-set -q _flag_T
-and set -g cyb_retry_T $_flag_T
-or set -g cyb_retry_T 60
-
-set -q _flag_silent
-and set -g cyb_retry_s 1
+set -l want (math $seps + 1)
 
 set -l rh (__cyb_retry_reset $argv); or exit 2
-
 while true
     __cyb_retry_tick $rh; or exit 1
 
-    set -l qq_dir (cybw query $vflag -o root $argv); or exit $status
+    set -l qq_dir (cybw query -o root -- $argv); or exit $status
 
-    # succès quand aucun targ n'est manquant (tous ont au moins un hit).
-    set -l diff (comm -23 \
-        (path basename -- $argv | sort | psub) \
-        (path basename -- $qq_dir/* | sort | psub)
-    )
-    if test -z "$diff"
-        set -q CYBTRACE; and llinf "found all : $(llcode $argv)"
+    # succès quand chaque index 0..want-1 a un sous-dossier (≥1 hit).
+    set -l got $qq_dir/*
+    if test (count $got) -eq $want
+        set -q CYBW_TRACE; and llinf "found all : $(llcode $argv)"
         exit 0
     end
 end

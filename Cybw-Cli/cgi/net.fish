@@ -18,18 +18,18 @@ or exit (llerr -e2 "bad usage")
 set -q _flag_T
 or set _flag_T 60
 
-echo $_flag_u >$_CYB_REQ/url
-echo $_flag_T >$_CYB_REQ/timeout
+echo $_flag_u >$_CYBW_REQ/url
+echo $_flag_T >$_CYBW_REQ/timeout
 
-_cyb_op net 2>$_CYB_ERR
-or exit (llerr -e1 "op failed: $_flag_url $(llcode (cat $_CYB_ERR))")
+_cyb_op net 2>$_CYBW_ERR
+or exit (llerr -e1 "op failed: $_flag_url $(llcode (cat $_CYBW_ERR))")
 
-set -l req_file $_CYB_RESP/request.har
+set -l req_file $_CYBW_RESP/request.har
 
 # Ni erreur ni résultat => deadline elapsed
 test -s $req_file
 or exit (llwar -e1 "deadline elapsed")
 
 cat $req_file
-set -q CYBTRACE; and llinf "captured request for $(llcode $_flag_url)"
+set -q CYBW_TRACE; and llinf "captured request for $(llcode $_flag_url)"
 exit 0

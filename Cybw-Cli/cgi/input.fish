@@ -1,52 +1,49 @@
 #!/usr/bin/env fish
-# remplit l'<input> matché par <targ_dir>/*.toml avec <--text>, ou y pose des
-# fichiers (<-f>, répétable) via DOM.setFileInputFiles — le nom vu par la page
-# est le basename du chemin local. Le locator doit matcher l'<input type=file>
-# LUI-MÊME (display:none accepté : ni scroll ni focus dans ce mode), jamais le
-# bouton stylé par-dessus — CDP refuse tout autre nœud. Taille cumulée < 16 Mio
-# strict : MAX_CONTENT_LENGTH Quart côté serveur, moins l'overhead tar
-# (~512 o/entrée + padding + le targ). POST /fill.
-
-# Met un nombre ou du texte :
-# `cybw input --text "" <targ>`
+# Définit la valeur d'un input, textarea ou select.
+# * Supporte les fichiers.
+# * Humanisation sans configuration
 #
-# Upload un ou plusieurs fichiers :
-# `cybw input --file a --file b <targ>`
+#   cybw input --text "vendeur de glaces" -e '<css>'
+#   cybw input --file a --file b -e '<css>'
 
 set -lx log_registry CybSet
-__cyb_op_init; or exit 1
 
-argparse -N1 -X1 "t/text=" "f/file=+" -- $argv
+source ./lib/transport.fish
+source ./lib/argparse_selectors.fish
+
+argparse -x t,f 't/text=' 'f/file=+' -- $argv
+and test -n "$_flag_text" -o -n "$_flag_file"
 or exit (llerr -e2 "bad usage")
 
-set -q _flag_text; or set -q _flag_file
-or exit (llerr -e2 "no input value provided")
+set -l selector (argparse_selectors $argv)
+and test (count $selector) -eq 1
+or exit (llerr -e2 "expected one selector")
 
-set -q _flag_text; and set -q _flag_file
-and exit (llerr -e2 "text and file flags are mutually exclusive")
+__cyb_op_init; or exit 1
 
-cp -r $argv[1] $_CYB_REQ/targ
+echo $selector >$_CYBW_REQ/0.json
 
 if set -q _flag_file
-    mkdir $_CYB_REQ/files
+    mkdir $_CYBW_REQ/files
     for src in $_flag_file
-        set -l dest $_CYB_REQ/files/(path basename -- $src)
+        set -l dest $_CYBW_REQ/files/(path basename -- $src)
+
         if test -f $dest
             exit (llerr -e2 "duplicate basename: $(path basename -- $src)")
         end
 
         cp -- $src $dest; or exit (llerr -e2 "unreadable file: $src")
 
-        if test (stat -c %s -- $dest) -gt 10485760
+        if test (stat -c %s -- $dest) -gt (math '1024 * 1024 * 10')
             llwar "$(llcode $src) exceeds 10 MiB (server cap: 16 MiB total)"
         end
     end
 else if set -q _flag_text
-    echo $_flag_text >$_CYB_REQ/text
+    echo $_flag_text >$_CYBW_REQ/text
 end
 
-_cyb_op fill 2>$_CYB_ERR
-or exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYB_ERR))")
+_cyb_op fill >$_CYBW_ERR
+or exit (llerr -e1 "error: $(llcode (cat $_CYBW_ERR))")
 
-set -q CYBTRACE; and llinf "input $(llcode $_flag_text $_flag_file) on $(llcode $argv[1])"
+set -q CYBW_TRACE; and llinf "input $(llcode $_flag_text $_flag_file)"
 exit 0

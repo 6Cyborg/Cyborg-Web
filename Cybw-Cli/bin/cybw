@@ -1,15 +1,18 @@
 #!/usr/bin/env fish
+set -lx log_registry Cybw
 
-# Entrypoint cyborg qui remplace les fonctions.
+# corrige cwd pour les CGI
+set -gx CYBW_BAK_CWD (pwd)
+cd (status dirname)/..
 
-set -l cgi (status dirname)/../cgi
-switch $argv[1]
-    case net visit js query tap select input snap cookie css all none race auto export-profile set-profile
-        $cgi/$argv[1].fish $argv[2..-1]
-    case ''
-        echo "usage: cybw <net|visit|js|query|tap|select|input|snap|cookie|css|all|none|race|auto|export-profile|set-profile> [args…]" >&2
-        exit 2
-    case '*'
-        echo "cyb: commande inconnue: $argv[1]" >&2
-        exit 2
-end
+# restaure cwd
+function on_sigint --on-signal SIGINT; exit 130; end
+function on_sigterm --on-signal SIGTERM; exit 143; end
+function on_exit --on-event fish_exit; cd $CYBW_BAK_CWD; end
+
+set -l script cgi/$argv[1].fish
+
+test -f "$script"
+or exit (llerr -e2 "commande inconnu: $(llcode $argv[1])")
+
+$script $argv[2..-1]

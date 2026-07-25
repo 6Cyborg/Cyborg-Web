@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["nodriver", "quart", "tomli-w"]
+# dependencies = ["nodriver", "quart"]
 # ///
 """Cyborg `/cyborg` data-plane server (Host-Android side).
 
@@ -11,9 +11,9 @@ attaches to an already-running Chrome over CDP (`127.0.0.1:9222`) via nodriver
 and speaks the contract défini par `Cyborg-User-SDK/cyborg.fish`:
 
     POST /visit  (tar in)                 -> navigate ; url depuis fichier `url`
-    POST /query  (tar in/out)             -> per hit: locator.toml + text + html ;
+    POST /query  (tar in/out)             -> per hit: text + html (dossier `<i>/`) ;
          max depuis fichier `max` (int, 0/absent -> cap 1000)
-    POST /tap    (tar in, flat)           -> click first match (single Targ)
+    POST /tap    (tar in, flat)           -> click first match (single selecteur)
     POST /fill   (tar in, flat)           -> focus first match + type text ;
          text depuis fichier `text` ; OU, si le sous-dossier `files/` est
          présent, injecte chaque `files/<basename>` dans le match (input
@@ -33,35 +33,27 @@ and speaks the contract défini par `Cyborg-User-SDK/cyborg.fish`:
 
 Tous les endpoints data sont en POST : les parametres scalaires (url, max, text,
 timeout) sont lus depuis des FICHIERS du tar de requete (via `read_tar_dir`), en
-strippant le `\n` final ajoute par le client (`echo`). Les Targs sont des
-sous-dossiers du tar (`load_targs`) ; les actions mono-Targ (tap/fill/select)
-prennent l'unique Targ. `/status` reste en GET (health/lease).
+strippant le `\n` final ajoute par le client (`echo`). Les selecteurs sont des
+fichiers `<index>.json` du tar (`load_selectors`) ; les actions mono-selecteur
+(tap/fill/select) prennent l'unique selecteur. `/status` reste en GET (health/lease).
 
 Vocabulaire :
-  * **LocatorFile** : un `.toml` côté client. Il porte un **Selector** typé.
-    Pour le moment seul le CssSelector existe :
+  * **Selecteur** : un `.json` produit par le CLI (argparse -> jq). Compile en
+    CssSelector cote serveur (`_parse_locator_file`). Schema :
 
-        [Css]
-        target = '<css selector>'
-        nth = { index = 3, size = 12 }   # optionnel, voir Nth
-        exact_text = '...'               # optionnel, assertion innerText (strip)
+        {"element": "<css>", "pierce": false, "iframe": "<--frame>|null",
+         "nth": <int>|null, "exact_text": "<str>|null", "mode": "attached"}
 
-        [[Css.iframe]]                # optionnel, répétable
-        url_needles = ['needle1', ..] # filtre par URL de frame
+    `iframe` (option `--frame`) : mini-syntaxe `iframe[url<op>"v"]…` compilee en
+    filtres (cf. `_parse_frame_selector`). Virgule = OR, `[url…]` accoles = AND ;
+    operateurs `=` exact, `*=` sous-chaine, `^=` prefixe, `$=` suffixe, `~=`
+    regex. Si present, la recherche est restreinte aux iframes matchant ; sinon
+    au top frame UNIQUEMENT. `mode` = attached | visible | hidden (par selecteur).
+    `nth` = index 0-based facon Playwright (aucun garde de taille).
 
-    Sémantique du filtre iframe : si AU MOINS un `[[Css.iframe]]` est présent,
-    la recherche est restreinte aux iframes dont la frame_url contient TOUTES
-    les `url_needles` d'AU MOINS une des entries `[[Css.iframe]]` (AND
-    intra-entry, OR inter-entry). La page courante (top frame) n'est jamais
-    cherchée. Si aucun `[[Css.iframe]]`, recherche dans le top frame
-    UNIQUEMENT (jamais dans les iframes).
-
-  * **Targ**    : une recherche logique = liste de LocatorFiles ordonnés
-    par basename lex. Premier locator qui produit ≥ 1 hit gagne, les
-    suivants ne sont pas essayés. Côté requête :
-      - /query : tar avec sous-dossiers, chaque sous-dossier = un Targ.
-      - /tap, /fill : tar plat (LocatorFiles directement à la racine) =
-        un seul Targ.
+  * Une recherche = UN selecteur (plus de fallback multi-locator). Cote requete :
+      - /query : plusieurs `<index>.json` a la racine, nommes par index client.
+      - /tap, /fill, /select : un seul `.json` a la racine.
 
   * **Target**  : l'identifiant opaque Chrome d'une page ou d'une iframe
     (`targetId`). Listing des frames trivial : top tab + chaque
@@ -125,9 +117,9 @@ from nodriver import cdp
 import cyborg_dom
 import cyborg_har
 from cyborg_dom import (
-    download_req_tar, load_targ, load_targs, read_tar_dir, build_tar,
-    list_frame_ids, get_frame_by_id, collect_frames,
-    _search_targ, _gen_exact_locator_css, _send, _tab,
+    download_req_tar, load_selector, load_selectors, read_tar_dir, build_tar,
+    list_frame_ids, get_frame_by_id, collect_frames, find_frame,
+    _search_selector, _send, _tab,
 )
 from cyborg_tap import reliable_tap, _TapTimeout, _NoMatch
 
@@ -216,36 +208,28 @@ async def query():
     _touch()
 
     with download_req_tar(await quart.request.get_data()) as req_tar:
-        targs = load_targs(req_tar)
+        selectors = load_selectors(req_tar)
         members = read_tar_dir(req_tar)
     max_raw = members.get("max", b"0").decode("utf-8").rstrip("\n")
     given_budget = int(max_raw) if max_raw else 0
 
-    # mode OBLIGATOIRE : attached | visible | hidden. Absent ou invalide => fatal
-    # (le client — cgi/query.fish — écrit toujours ce fichier).
-    mode_raw = members.get("mode")
-    if mode_raw is None:
-        return "missing mode file", 400
-    mode = mode_raw.decode("utf-8").strip()
-    if mode not in ("attached", "visible", "hidden"):
-        return f"bad mode: {mode!r}", 400
-
-    if not targs:
-        return "bad targs", 400
+    if not selectors:
+        return "bad selectors", 400
     budget = given_budget if given_budget > 0 else 1_000
 
     tab = await _tab()
 
+    # Le mode (attached/visible/hidden) est porté PAR sélecteur (`sel.mode`).
+    # Chaque sélecteur est nommé par son index client (0, 1, …) => `<index>/…`.
     files = {}
-    for targ_name, targ in targs.items():
-        hits = await _search_targ(tab, targ, budget, mode)
+    for name, sel in selectors.items():
+        hits = await _search_selector(tab, sel, budget, sel.mode)
         budget = max(0, budget - len(hits))
 
         for i, h in enumerate(hits):
-            base = f"{targ_name}/{i:04d}"
+            base = f"{name}/{i:04d}"
             files[f"{base}/text"] = h.inner_text.encode("utf-8")
             files[f"{base}/html"] = h.outer_html.encode("utf-8")
-            files[f"{base}/locator.toml"] = _gen_exact_locator_css(h.selector, h.nth, h.inner_text)
 
         if budget <= 0:
             break
@@ -257,15 +241,15 @@ async def query():
 async def tap():
     _touch()
 
-    # Tar plat mono-Targ : on prend le premier (seul) Targ, comme /fill /select.
+    # Tar plat mono-sélecteur : on prend le premier (seul), comme /fill /select.
     with download_req_tar(await quart.request.get_data()) as req_tar:
-        targ = next(iter(load_targs(req_tar).values()), None)
+        sel = next(iter(load_selectors(req_tar).values()), None)
 
     # /tap renvoie TOUJOURS un tar : `tries/NNNN.json` (une tentative par fichier)
     # + `error.txt` si echec. Le client (cgi/tap.fish) decide succes/echec par la
     # presence de error.txt ; c'est donc lui qui gere l'erreur, pas le transport.
-    if not targ:
-        return quart.Response(build_tar({"error.txt": b"bad targ"}),
+    if not sel:
+        return quart.Response(build_tar({"error.txt": b"bad selector"}),
                               mimetype="application/x-tar")
 
     # Page top.
@@ -276,7 +260,7 @@ async def tap():
     tries: list = []
     error = None
     try:
-        await reliable_tap(tab, targ, tries=tries)
+        await reliable_tap(tab, sel, tries=tries)
     except _NoMatch as e:
         error = f"no match: {e}"
     except _TapTimeout as e:
@@ -295,21 +279,20 @@ async def fill():
     _touch()
 
     with download_req_tar(await quart.request.get_data()) as req_tar:
-        targs = load_targs(req_tar)
-        targs.pop("files", None)  # sous-dossier d'upload, pas un Targ
-        targ = next(iter(targs.values()), None)
+        sel = next(iter(load_selectors(req_tar).values()), None)
         members = read_tar_dir(req_tar)
     text = members.get("text", b"").decode("utf-8").rstrip("\n")
     uploads = {posixpath.basename(n): data for n, data in members.items()
                if n.startswith("files/")}
 
-    if not targ:
-        return "bad targ", 400
+    if not sel:
+        return "bad selector", 400
 
     tab = await _tab()
 
-    # Éxécute la recherche
-    hits = await _search_targ(tab, targ, 1,
+    # Éxécute la recherche (les uploads sous `files/` ne sont pas des .json à la
+    # racine => load_selectors les ignore, pas besoin de les retirer).
+    hits = await _search_selector(tab, sel, 1,
                               mode="attached" if uploads else "visible")
     if not hits:
         return "no match", 404
@@ -372,17 +355,17 @@ async def select():
     _touch()
 
     with download_req_tar(await quart.request.get_data()) as req_tar:
-        targ = next(iter(load_targs(req_tar).values()), None)
+        sel = next(iter(load_selectors(req_tar).values()), None)
         members = read_tar_dir(req_tar)
     text = members.get("text", b"").decode("utf-8").rstrip("\n")
 
-    if not targ:
-        return "bad targ", 400
+    if not sel:
+        return "bad selector", 400
 
     tab = await _tab()
 
     # Éxécute la recherche
-    hits = await _search_targ(tab, targ, 1)
+    hits = await _search_selector(tab, sel, 1)
     if not hits:
         return "no match", 404
     h = hits[0]
@@ -428,10 +411,9 @@ async def js():
 
     with download_req_tar(await quart.request.get_data()) as req_tar:
         members = read_tar_dir(req_tar)
-        # `rel/` (optionnel) : un Targ qui ne sert qu'à choisir la FRAME où éval.
-        # On y cherche un élément, puis on éval dans SA frame — l'élément lui-même
-        # n'est pas passé au script (`this` reste le globalThis de la frame).
-        rel_targ = load_targ(req_tar, "rel")
+        # `frame.json` (optionnel) : sélecteur d'iframe (`--frame`) qui choisit la
+        # FRAME où évaluer. On résout la frame par son URL, puis on éval dedans.
+        frame_sel = load_selector(req_tar, "frame")
 
     arguments = [
         cdp.runtime.CallArgument(value=v)
@@ -447,20 +429,22 @@ async def js():
     # callFunctionOn s'exécute dans le contexte qui possède l'objectId, donc
     # récupérer `window` via un node de la frame suffit à router l'éval là-bas.
     frame_sid = None
-    if rel_targ is not None:
-        hits = await _search_targ(tab, rel_targ, 1)
-        if not hits:
-            return quart.Response(build_tar({"error": b"rel: no match"}),
+    if frame_sel is not None:
+        frame = await find_frame(tab, frame_sel)
+        if frame is None:
+            return quart.Response(build_tar({"error": b"frame: no match"}),
                                   mimetype="application/x-tar")
-        frame_sid = hits[0].frame_sid
-        node = await _send(tab, cdp.dom.resolve_node(
-            backend_node_id=hits[0].backend_node_id), frame_sid)
+        frame_sid = frame.frame_sid
+        # globalThis de la frame = document.defaultView. resolve_node par
+        # backendNodeId marche pour OOPIF (session dédiée) comme pour in-process.
+        doc_remote = await _send(tab, cdp.dom.resolve_node(
+            backend_node_id=frame.frame_doc.backend_node_id), frame_sid)
         glob, exc = await _send(tab, cdp.runtime.call_function_on(
-            function_declaration="function() { return this.ownerDocument.defaultView; }",
-            object_id=node.object_id,
+            function_declaration="function() { return this.defaultView; }",
+            object_id=doc_remote.object_id,
         ), frame_sid)
         if exc is not None:
-            raise RuntimeError(f"/js rel globalThis resolve failed: {exc}")
+            raise RuntimeError(f"/js frame globalThis resolve failed: {exc}")
     else:
         # callFunctionOn exige un objet hôte : `this` = globalThis du top frame.
         glob, exc = await tab.send(cdp.runtime.evaluate(expression="globalThis"))

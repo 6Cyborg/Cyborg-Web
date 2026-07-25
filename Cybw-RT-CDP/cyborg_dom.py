@@ -1,13 +1,13 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["nodriver", "tomli-w"]
+# dependencies = ["nodriver"]
 # ///
 """Cyborg DOM/search/frame layer — primitives partagees (data-plane).
 
 Ce module porte TOUT ce qui ne depend NI de Quart (`app`) NI des handlers HTTP :
 les dataclasses de locator/hit/frame, le routage CDP `_send`, la decouverte de
-frames/shadow-roots, la recherche `_search_targ`, les helpers tar, et le global
+frames/shadow-roots, la recherche `_search_selector`, les helpers tar, et le global
 `BROWSER`/`_tab()`. cyborg_server.py et cyborg_tap.py importent d'ici.
 
 Sens d'import acyclique : cyborg_visibility (feuille) <- cyborg_dom <-
@@ -23,15 +23,14 @@ depuis cyborg_server ET cyborg_tap.
 import _fix_nodriver   # noqa: F401 — MUST precede `import nodriver`. # type: ignore
 
 import io
-import posixpath
+import json
+import re
 import sys
 import tarfile
-import tomllib
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import nodriver
-import tomli_w
 from nodriver import cdp
 from nodriver.core.connection import ProtocolException  # noqa: F401 — re-exporte
 
@@ -66,61 +65,106 @@ async def _send(tab, cmd, session_id=None):
 # (importés ci-dessus, ré-exportés ici pour cyborg_tap).
 
 
-# ── LocatorFile → CssSelector ─────────────────────────────────────────────────
-
-@dataclass
-class Nth:
-    index: int
-    size: int
-
+# ── Sélecteur JSON → CssSelector ──────────────────────────────────────────────
 
 @dataclass
 class CssSelector:
+    """Sélecteur compilé depuis les paramètres CLI (le `.json` de requête).
+    `iframe_filters` : OR d'entrées, chaque entrée = AND de prédicats
+    `(op, valeur)` sur l'URL de frame (cf. `_parse_frame_selector`).
+    `nth` : index 0-based façon Playwright (aucun garde de taille).
+    `mode` : attached | visible | hidden."""
     target: str
-    iframe_filters: list[list[str]] = field(default_factory=list)
-    nth: Optional[Nth] = None
+    iframe_filters: list[list[tuple[str, str]]] = field(default_factory=list)
+    nth: Optional[int] = None
     exact_text: Optional[str] = None
     pierce: bool = False
+    mode: str = "attached"
 
 
-@dataclass
-class Targ:
-    locators: list[CssSelector]
+_FRAME_PRED_RE = re.compile(
+    r'\[\s*url\s*(\*=|\^=|\$=|~=|=)\s*"((?:[^"\\]|\\.)*)"\s*\]')
 
 
-# TODO: _parse_locator_file ne devrait pas être un adaptateur
+def _split_top_commas(s: str) -> list[str]:
+    """Découpe sur les virgules de profondeur 0 (hors `[...]` et hors
+    guillemets) — la virgule d'une regex `~="a{2,4}"` reste protégée."""
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    in_q = esc = False
+    for ch in s:
+        if esc:
+            buf.append(ch)
+            esc = False
+        elif ch == "\\":
+            buf.append(ch)
+            esc = True
+        elif in_q:
+            buf.append(ch)
+            if ch == '"':
+                in_q = False
+        elif ch == '"':
+            buf.append(ch)
+            in_q = True
+        elif ch == "[":
+            depth += 1
+            buf.append(ch)
+        elif ch == "]":
+            depth -= 1
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        parts.append("".join(buf))
+    return parts
+
+
+def _parse_frame_selector(raw: Optional[str]) -> list[list[tuple[str, str]]]:
+    """Compile la mini-syntaxe `--frame` (élément `iframe` + attribut `url`
+    uniquement, jamais envoyée à querySelector). Virgule = OR entre entrées ;
+    `[url…]` accolés = AND intra-entrée. Opérateurs : `=` exact, `*=`
+    sous-chaîne, `^=` préfixe, `$=` suffixe, `~=` regex (re.search)."""
+    if not raw:
+        return []
+    filters: list[list[tuple[str, str]]] = []
+    for entry in _split_top_commas(raw):
+        preds = [(op, re.sub(r"\\(.)", r"\1", val))
+                 for op, val in _FRAME_PRED_RE.findall(entry)]
+        if preds:
+            filters.append(preds)
+    return filters
+
+
 def _parse_locator_file(raw: bytes) -> Optional[CssSelector]:
-    """Parse un LocatorFile (.toml) en CssSelector. LocatorFile mal formé →
-    None (skip silencieux, comme côté client SDK)."""
-
-    enum = tomllib.loads(raw.decode("utf-8"))
-
-    if "Css" not in enum:
-        # Unknown variant
+    """Parse un sélecteur CLI (.json) en CssSelector. JSON invalide ou sans
+    `element` → None (skip silencieux)."""
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(doc, dict) or not doc.get("element"):
         return None
 
-    css = enum["Css"]
-    target = css["target"]
+    mode = doc.get("mode") or "attached"
+    if mode not in ("attached", "visible", "hidden"):
+        mode = "attached"
 
-    nth_raw = css.get("nth")
-    nth: Optional[Nth] = None
-    if nth_raw is not None:
-        nth = Nth(index=nth_raw["index"], size=nth_raw["size"])
+    nth = doc.get("nth")
+    if nth is not None:
+        nth = int(nth)
 
-    exact_text = css.get("exact_text")
-
-    filters: list[list[str]] = []
-    for entry in (css.get("iframe") or []):
-        needles = entry.get("url_needles") or []
-        filters.append(needles)
-
-    pierce = css.get("pierce")
-    if pierce is None:
-        pierce = False
-
-    return CssSelector(target=target, iframe_filters=filters,
-                       nth=nth, exact_text=exact_text,
-                       pierce=pierce)
+    return CssSelector(
+        target=doc["element"],
+        iframe_filters=_parse_frame_selector(doc.get("iframe")),
+        nth=nth,
+        exact_text=doc.get("text_eq"),
+        pierce=bool(doc.get("pierce", False)),
+        mode=mode,
+    )
 
 
 # ── tar (de)serialisation ─────────────────────────────────────────────────────
@@ -136,64 +180,39 @@ def _normalize_tar_path(p: str) -> str:
     return p.strip("/")
 
 
-def load_targ(req_tar: tarfile.TarFile, path: str = "/") -> Optional[Targ]:
-    """
-    Ouvre de façon standard un `Targ` situé à `path` dans `req_tar`.
-    """
+def load_selector(req_tar: tarfile.TarFile, name: str) -> Optional[CssSelector]:
+    """Charge le sélecteur `<name>.json` (à la racine du tar). Utilisé par /js
+    pour la frame d'évaluation (`frame.json`)."""
+    target = _normalize_tar_path(name) + ".json"
+    for ent in req_tar.getmembers():
+        if ent.isfile() and _normalize_tar_path(ent.name) == target:
+            with req_tar.extractfile(ent) as f:
+                return _parse_locator_file(f.read())
+    return None
 
-    prefix = _normalize_tar_path(path)
+
+def load_selectors(req_tar: tarfile.TarFile,
+                   dir: str = "/") -> dict[str, CssSelector]:
+    """Chaque `<name>.json` directement sous `dir` → {name (sans .json):
+    CssSelector}. Le CLI nomme les fichiers par index (0, 1, …), donc les clés
+    sont uniques et ordonnables. Remplace load_targ/load_targs."""
+    prefix = _normalize_tar_path(dir)
     prefix = prefix + "/" if prefix else ""
-    entries: list[tuple[str, CssSelector]] = []
-
-    for ent_raw in req_tar.getmembers():
-        ent_path = _normalize_tar_path(ent_raw.name)
-        targ_name = ent_path[len(prefix):]
-
-        if not (
-            ent_path.startswith(prefix)
-            and "/" not in targ_name
-            and ent_raw.isfile()
-            and ent_raw.name.endswith(".toml")
-        ):
+    out: dict[str, CssSelector] = {}
+    for ent in req_tar.getmembers():
+        if not ent.isfile():
             continue
-
-        with req_tar.extractfile(ent_raw) as f:
-            locator = _parse_locator_file(f.read())
-
-        if locator:
-            entries.append((targ_name, locator))
-
-    # Range dans le bon ordre
-    locators = [s for _, s in sorted(entries, key=lambda x: x[0])]
-
-    return Targ(locators=locators) if locators else None
-
-
-def load_targs(req_tar: tarfile.TarFile,
-               root: str = "/") -> dict[str, Targ]:
-    """Pour chaque sous-dossier immédiat sous `root`, délègue à `load_targ`.
-    Clé du dict = nom du sous-dossier (relatif à `root`). Utilisé par
-    /query (tar avec plusieurs Targs sous forme de sous-dossiers)."""
-    prefix = _normalize_tar_path(root)
-    prefix_slash = prefix + "/" if prefix else ""
-    subdirs: set[str] = set()
-    for m in req_tar.getmembers():
-        if not m.isfile() or not m.name.endswith(".toml"):
+        name = _normalize_tar_path(ent.name)
+        if prefix and not name.startswith(prefix):
             continue
-        name = _normalize_tar_path(m.name)
-        if prefix_slash and not name.startswith(prefix_slash):
+        rel = name[len(prefix):]
+        if "/" in rel or not rel.endswith(".json"):
             continue
-        rel = name[len(prefix_slash):]
-        head, _, tail = rel.partition("/")
-        if tail:
-            subdirs.add(head)
-    result: dict[str, Targ] = {}
-    for sub in subdirs:
-        sub_path = posixpath.join("/" + prefix, sub) if prefix else "/" + sub
-        t = load_targ(req_tar, sub_path)
-        if t is not None:
-            result[sub] = t
-    return result
+        with req_tar.extractfile(ent) as f:
+            sel = _parse_locator_file(f.read())
+        if sel is not None:
+            out[rel[:-len(".json")]] = sel
+    return out
 
 
 def read_tar_dir(req_tar: tarfile.TarFile) -> dict[str, bytes]:
@@ -250,16 +269,11 @@ class Hit:
     `backend_node_id` valides ensemble. On ne garde que le backendNodeId
     (stable tant que le node existe) — jamais de nodeId, invalidé à chaque
     re-push de l'arbre DOM (p.ex. un `get_document`). `frame_offset_x/y` recopiés
-    de la frame portant ce node, pour la translation des coords de click.
-
-    `selector` + `nth` portent assez d'info pour rewrite un `locator.toml`
-    autonome qui re-cible exactement ce hit."""
+    de la frame portant ce node, pour la translation des coords de click."""
     frame_sid: Optional[Any]
     backend_node_id: Any
     frame_offset_x: float
     frame_offset_y: float
-    selector: CssSelector
-    nth: Nth
     inner_text: str
     outer_html: str
 
@@ -405,6 +419,24 @@ def walk_document_roots(doc, pierce: bool) -> list:
     return roots
 
 
+def _match_url_pred(op: str, val: str, url: str) -> bool:
+    """Évalue un prédicat `[url<op>"val"]` du filtre `--frame` contre l'URL."""
+    if op == "=":
+        return url == val
+    if op == "*=":
+        return val in url
+    if op == "^=":
+        return url.startswith(val)
+    if op == "$=":
+        return url.endswith(val)
+    if op == "~=":
+        try:
+            return re.search(val, url) is not None
+        except re.error:
+            return False
+    return False
+
+
 def guard_frame(frame: Frame, sel: CssSelector) -> bool:
     # Sans filtre => que la page courante
     if not sel.iframe_filters:
@@ -414,8 +446,8 @@ def guard_frame(frame: Frame, sel: CssSelector) -> bool:
     if frame.frame_is_top:
         return False
     return any(
-        all(needle in frame.frame_url for needle in needles)
-        for needles in sel.iframe_filters
+        all(_match_url_pred(op, val, frame.frame_url) for op, val in entry)
+        for entry in sel.iframe_filters
     )
 
 
@@ -489,11 +521,11 @@ async def _search_locator_css(tab, sel: CssSelector, limit: int,
 
     print(f"found {len(raw)} elements using {sel.target}")
 
-    # 2. Applique `nth` pour garder un seul élément du `querySelectorAll`.
-    nth_size = len(raw)
+    # 2. Applique `nth` (index 0-based, sémantique Playwright — aucun garde de
+    # taille) pour ne garder qu'un élément du `querySelectorAll`.
     if sel.nth is not None:
-        if sel.nth.size == nth_size and 0 <= sel.nth.index < nth_size:
-            candidates = [(sel.nth.index, raw[sel.nth.index])]
+        if 0 <= sel.nth < len(raw):
+            candidates = [(sel.nth, raw[sel.nth])]
         else:
             return []
     else:
@@ -550,33 +582,21 @@ async def _search_locator_css(tab, sel: CssSelector, limit: int,
 
         out.append(Hit(frame.frame_sid, bnid,
                        frame.frame_offset_x, frame.frame_offset_y,
-                       sel, Nth(index=idx, size=nth_size),
                        inner_text, outer_html))
 
     return out
 
 
-async def _search_targ(tab, targ: Targ, limit: int,
-                       mode: str = "attached") -> list[Hit]:
-    for sel in targ.locators:
-        hits = await _search_locator_css(tab, sel, limit, mode)
-        if hits:
-            return hits
-    return []
+async def _search_selector(tab, sel: CssSelector, limit: int,
+                           mode: str = "attached") -> list[Hit]:
+    """Recherche un unique CssSelector (plus de fallback multi-locator)."""
+    return await _search_locator_css(tab, sel, limit, mode)
 
 
-def _gen_exact_locator_css(orig: CssSelector, nth: Nth, inner_text: str) -> bytes:
-    """
-    Créer un LocatorFile pour ciblé exactement un élément (sans identifiant
-    interne Chrome).
-    """
-
-    css: dict[str, Any] = {
-        "target": orig.target,
-        "nth": {"index": nth.index, "size": nth.size},
-        "exact_text": inner_text,
-        "pierce": orig.pierce,
-    }
-    if orig.iframe_filters:
-        css["iframe"] = [{"url_needles": ns} for ns in orig.iframe_filters]
-    return tomli_w.dumps({"Css": css}).encode("utf-8")
+async def find_frame(tab, sel: CssSelector) -> Optional[Frame]:
+    """Première frame non-top satisfaisant le filtre `--frame` de `sel`
+    (utilisé par /js pour choisir la frame d'évaluation)."""
+    for frame in (await collect_frames(tab)):
+        if not frame.frame_is_top and guard_frame(frame, sel):
+            return frame
+    return None

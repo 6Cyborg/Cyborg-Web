@@ -8,12 +8,12 @@ argparse -N1 -X1 -- $argv; or exit (llerr -e2 "usage: cybw export-profile <dest.
 set -l dest $argv[1]
 
 
-_cyb_op export-profile 2>$_CYB_ERR
-or exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYB_ERR))")
+_cyb_op export-profile 2>$_CYBW_ERR
+or exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYBW_ERR))")
 
 # $_CYB_RESP contient cookies.json + storage/<origin>.json → archive .tar.xz.
-tar -cJf $dest -C $_CYB_RESP .
+tar -cJf $dest -C $_CYBW_RESP .
 or exit (llerr -e1 "archive $(llcode $dest) échouée [$status]")
 
-set -q CYBTRACE; and llinf "profil exporté vers $(llcode $dest)"
+set -q CYBW_TRACE; and llinf "profil exporté vers $(llcode $dest)"
 exit 0

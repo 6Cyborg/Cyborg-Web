@@ -47,7 +47,7 @@ from nodriver import cdp
 from nodriver.core.connection import ProtocolException
 
 from cyborg_dom import (  # noqa: F401 — Hit pour typing
-    Hit, _search_targ, _send, err_is_node_notfound,
+    Hit, _search_selector, _send, err_is_node_notfound,
 )
 
 
@@ -67,7 +67,7 @@ class _TapTimeout(Exception):
 
 
 class _NoMatch(Exception):
-    """Aucun element ne correspond au Targ (apres deadline). Mappe en 404."""
+    """Aucun element ne correspond au selecteur (apres deadline). Mappe en 404."""
 
 
 # ── Constantes du module ──────────────────────────────────────────────────────
@@ -104,11 +104,11 @@ async def _content_quads(tab, h, where) -> list:
     return quads
 
 
-async def search_element(tab, targ) -> Hit:
-    """Trouve le 1er match de `targ` avec `_search_targ`."""
-    hits = await _search_targ(tab, targ, 1, mode="visible")
+async def search_element(tab, sel) -> Hit:
+    """Trouve le 1er match de `sel` avec `_search_selector`."""
+    hits = await _search_selector(tab, sel, 1, mode="visible")
     if not hits:
-        raise _Retry("search_element: no element matches the targ yet")
+        raise _Retry("search_element: no element matches the selector yet")
     return hits[0]
 
 
@@ -333,7 +333,7 @@ async def _dispatch_click(tab, h, x, y):
                  "attached, no event received)")
 
 
-async def reliable_tap(tab, targ, *, timeout_s: float = 30.0, tries: list | None = None) -> None:
+async def reliable_tap(tab, sel, *, timeout_s: float = 30.0, tries: list | None = None) -> None:
     """Clic gauche fiable (toutes techniques Playwright A-F activees en dur).
 
     Boucle bornee par un deadline global (loop.time()). Chaque tentative
@@ -369,7 +369,7 @@ async def reliable_tap(tab, targ, *, timeout_s: float = 30.0, tries: list | None
 
         try:
             # Cherche l'élément.
-            h = await search_element(tab, targ)
+            h = await search_element(tab, sel)
             ever_found = True
 
             # Affiche l'élément à l'écran (scroll).

@@ -1,47 +1,43 @@
 #!/usr/bin/env fish
-# attend que le 1er sélecteur trouve au moins un élément.
-# 1ère ligne = path du targ gagnant, puis ses hits. Permet :
-#   set -l then (cybw race elems/a elems/b)
+# attend que le 1er sélecteur (par index) trouve au moins un élément.
+# 1ère ligne = index gagnant (0, 1, …), puis ses hits. Permet :
+#   set -l then (cybw race -- -e 'a' -- -e 'b')
 #   switch $then[1]
-#        case elems/a ; for p in $then[2..-1]; cat $p; end
-#        case elems/b ; for p in $then[2..-1]; cat $p; end
-#        case ''      ; echo 'deadline has elapsed'
+#        case 0 ; for p in $then[2..-1]; cat $p; end
+#        case 1 ; for p in $then[2..-1]; cat $p; end
+#        case '' ; echo 'deadline has elapsed'
 #   end
 set -lx log_registry CybRace
-__cyb_op_init; or exit 1
+source ./lib/retry.fish
 
-argparse -N1 "s/silent" "T/timeout=" "V/visible" -- $argv; or exit (llerr -e2 "bad usage")
+argparse 's/silent' 'T/timeout=' -- $argv
+or exit (llerr -e2 "bad usage")
 
-set -l vflag  # -V/--visible propagé à `cybw query` (ne race que les visibles)
-if set -q _flag_visible
-    set vflag -V
+set -q _flag_timeout; and set -g cyb_retry_T $_flag_timeout; or set -g cyb_retry_T 60
+set -q _flag_silent; and set -g cyb_retry_s 1
+
+# nombre de sélecteurs = (# de `--` restants) + 1.
+set -l seps 0
+for a in $argv
+    test "$a" = --; and set seps (math $seps + 1)
 end
-
-set -q _flag_T
-and set -g cyb_retry_T $_flag_T
-or set -g cyb_retry_T 60
-
-set -q _flag_silent
-and set -g cyb_retry_s 1
+set -l n (math $seps + 1)
 
 set -l rh (__cyb_retry_reset $argv); or exit 2
-
 while true
     __cyb_retry_tick $rh; or exit 1
 
-    set -l qq_dir (cybw query $vflag -o root $argv); or exit $status
+    set -l qq_dir (cybw query -o root -- $argv); or exit $status
 
-    # succès au 1er targ (ordre passé) qui a un hit ; émet son path puis ses hits.
-    for f in $argv
-        set -l targ_qq_dir $qq_dir/(path basename -- $f)
+    # succès au 1er index (ordre passé) qui a un hit ; émet l'index puis ses hits.
+    for i in (seq 0 (math $n - 1))
+        set -l hits $qq_dir/$i/*
+        test (count $hits) -gt 0; or continue
 
-        test -d $targ_qq_dir
-        or continue
+        echo $i
+        path resolve -- $hits
 
-        echo $f
-        path resolve -- $targ_qq_dir/*
-
-        set -q CYBTRACE; and llinf "race winner : $(llcode $f)"
+        set -q CYBW_TRACE; and llinf "race winner : #$i"
         exit 0
     end
 end
