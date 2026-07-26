@@ -2,10 +2,10 @@
 # Éxécute un script dès qu'un élément est trouvé dans le but de le faire disparaitre.
 #
 # - Exemple éxécute une seule fois
-# cybw auto -d ./dismiss-cookies.fish -- -e 'a.cookie-accept'   
+# cybw auto --exec ./dismiss-cookies.fish '<sel>'
 #
 # - Exemple re-éxécute si réapparait :
-# cybw auto -m0 -d ./close-chat.fish  -- -e '.chatbox'          
+# cybw auto -m0 --exec ./close-chat.fish '<sel>'
 
 set -lx log_registry Cybw-Auto
 
@@ -19,12 +19,12 @@ or set _flag_m 1
 set -l done 0
 
 while true
-    cybw all -s -- $argv; or continue
+    cybw all -s $argv; or continue
 
     llwait "processing: $(llcode $argv)"
     $_flag_exec
 
-    cybw none -s -T2 -- $argv
+    cybw none -s -T2 $argv
     or llwar "not processed: $(llcode $argv)"
 
     set done (math $done + 1)

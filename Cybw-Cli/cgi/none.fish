@@ -1,6 +1,6 @@
 #!/usr/bin/env fish
 # attend qu'AUCUN sélecteur ne matche plus rien.
-#   cybw none [-s] [-T N] -- -e 'a' -- -e 'b'
+#   cybw none [-s] [-T N] '<sel1>' '<sel2>'
 set -lx log_registry CybNone
 source ./lib/retry.fish
 
@@ -14,7 +14,7 @@ set -l rh (__cyb_retry_reset $argv); or exit 2
 while true
     __cyb_retry_tick $rh; or exit 1
 
-    set -l qq (cybw query -o items -- $argv); or exit $status
+    set -l qq (cybw query -o items $argv); or exit $status
 
     if test -z "$qq"
         set -q CYBW_TRACE; and llinf "found neither : $(llcode $argv)"

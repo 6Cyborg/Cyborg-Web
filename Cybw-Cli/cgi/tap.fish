@@ -5,9 +5,9 @@
 set -lx log_registry CybTap
 
 source ./lib/transport.fish
-source ./lib/argparse_selectors.fish
+source ./lib/serialize_selector.fish
 
-set -l selector (argparse_selectors $argv)
+set -l selector (serialize_selector $argv)
 and test (count $selector) -eq 1
 or exit (llerr -e2 "expected one selector")
 

@@ -4,14 +4,14 @@
 set -lx log_registry CybSelect
 
 source ./lib/transport.fish
-source ./lib/argparse_selectors.fish
+source ./lib/serialize_selector.fish
 
 # -i : capte -t/--text, laisse passer les flags de sélecteur.
 argparse -i 't/text=' -- $argv
 and set -q _flag_text
 or exit (llerr -e2 "bad usage")
 
-set -l selector (argparse_selectors $argv)
+set -l selector (serialize_selector $argv)
 and test (count $selector) -eq 1
 or exit (llerr -e2 "expected one selector")
 

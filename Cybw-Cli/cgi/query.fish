@@ -3,7 +3,7 @@
 # cybw query [-m N] [-o items|root] -- ...
 set -lx log_registry CybQuery
 source ./lib/transport.fish
-source ./lib/argparse_selectors.fish
+source ./lib/serialize_selector.fish
 
 argparse 'm/max=' 'o/output=' -- $argv; or exit (llerr -e2 "bad usage")
 set -q argv[1]; or exit (llerr -e2 "no selector")
@@ -16,9 +16,9 @@ __cyb_op_init; or exit 1
 echo $_flag_max >$_CYBW_REQ/max
 
 set -l idx 0
-for contents in (argparse_selectors $argv)
-    set idx (math $idx + 1)
+for contents in (serialize_selector $argv)
     echo $contents > $_CYBW_REQ/$idx.json
+    set idx (math $idx + 1)
 end
 
 _cyb_op query >$_CYBW_ERR

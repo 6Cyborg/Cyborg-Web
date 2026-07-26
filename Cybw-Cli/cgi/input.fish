@@ -9,13 +9,13 @@
 set -lx log_registry CybSet
 
 source ./lib/transport.fish
-source ./lib/argparse_selectors.fish
+source ./lib/serialize_selector.fish
 
 argparse -x t,f 't/text=' 'f/file=+' -- $argv
 and test -n "$_flag_text" -o -n "$_flag_file"
 or exit (llerr -e2 "bad usage")
 
-set -l selector (argparse_selectors $argv)
+set -l selector (serialize_selector $argv)
 and test (count $selector) -eq 1
 or exit (llerr -e2 "expected one selector")
 

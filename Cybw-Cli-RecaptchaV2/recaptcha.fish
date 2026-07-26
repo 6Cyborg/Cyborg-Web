@@ -2,15 +2,20 @@
 #
 # Traite si besoin le popup RecaptchaV2. invisible.fish/normal.fish l'appellent.
 #
-# Args : les OUTCOMES du site (états de succès/échec attendus), en sélecteurs
-# `--`-délimités. Sortie stdout : ligne 1 = index 0-based de l'outcome gagnant ;
-# lignes suivantes = ses hits. Sort 1 si rien.
+# Args : les OUTCOMES du site (états de succès/échec attendus), une chaîne-
+# sélecteur par argument. Sortie stdout : ligne 1 = index 0-based de l'outcome
+# gagnant ; lignes suivantes = ses hits. Sort 1 si rien.
+
+# FIXME:
+llwar "merci de résoudre manuellement le captcha"
+cybw race -T90 $argv
+exit 0
 
 set -l CYB_RV2_HOME (status filename | path resolve | path dirname)
 source $CYB_RV2_HOME/selectors.fish
 
-argparse -N1 -- $argv; or exit 2
 set -l outcomes $argv
+test -n "$outcomes"; or exit 2
 
 set -l tmp_mp3 (mktemp -t cyb-recaptchav2-audio.XXXXXXXXX.mp3)
 
@@ -19,9 +24,10 @@ function cleanup --on-event fish_exit
 end
 
 function _transcribe -a url
-    # TODO : _transcribe doit connaître language
     set -q GROQ_API_KEY
     or set GROQ_API_KEY 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
+
+    # TODO : _transcribe doit connaître language
 
     set -l text (curl -s https://api.groq.com/openai/v1/audio/transcriptions \
         -H "Authorization: Bearer $GROQ_API_KEY" \
@@ -39,7 +45,7 @@ function _transcribe -a url
 end
 
 # nav_audio (index 0) vs outcomes (index 1..N) : popup ouvert, ou succès direct ?
-set -l start_race (cybw race -V -- $rc_nav_audio -- $outcomes)
+set -l start_race (cybw race $rc_nav_audio $outcomes)
 switch $start_race[1]
     case 0
         llinf "Recaptcha V2 popup ouvert"
@@ -57,7 +63,7 @@ end
 
 llwait "Sélection du mode audio"
 cybw tap $rc_nav_audio
-set -l audio_race (cybw race -- $rc_audio_link -- $rc_audio_refusal)
+set -l audio_race (cybw race $rc_audio_link $rc_audio_refusal)
 switch $audio_race[1]
     case 0
         llinf "Mode audio autorisé"
@@ -69,19 +75,24 @@ end
 
 for attempt in (seq 15)
     if test $attempt -ne 1
+       and test (math $attempt % 10) -eq 0
         cybw tap $rc_reload
-        cybw none -- $rc_audio_bad -V
+        cybw none $rc_audio_bad
+        lwar "reloaded audio"
     end
 
-    sleep 1
+    sleep 3
 
-    set -l audio_btn (cybw query -V -- $rc_audio_link)
-    set -l audio_url (pup '[href]' 'attr{href}' <$audio_btn/html | string replace -a '&amp;' '&')
+    set -l audio_btn (cybw query $rc_audio_link)
+    or exit (llerr -e1 "bouton URL vers l'audio introuvable")
+
+    set -l audio_url (pup '[href]' 'attr{href}' <$audio_btn/html |
+        string replace -a '&amp;' '&')
 
     llwait "Tentative #$attempt sur $(llcode $audio_url)"
 
     if not set -l audio_size (curl -sI $audio_url | rg -m1 -i 'content-length' | rg -o '\d+')
-        or test $audio_size -eq 0
+       or test $audio_size -eq 0
         llwar "Audio vide."
         continue
     end
@@ -91,11 +102,11 @@ for attempt in (seq 15)
         continue
     end
 
-    cybw input --text "$audio_text" -- $rc_audio_input
+    cybw input --text "$audio_text" $rc_audio_input
     cybw tap $rc_submit
 
     # audio_bad (index 0) vs outcomes (index 1..N)
-    set -l end_race (cybw race -V -- $rc_audio_bad -- $outcomes)
+    set -l end_race (cybw race $rc_audio_bad $outcomes)
     switch $end_race[1]
         case 0
             llwar "Transcription mauvaise : $(llcode (cat $end_race[2]/text))"

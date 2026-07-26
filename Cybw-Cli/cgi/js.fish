@@ -5,7 +5,7 @@
 set -lx log_registry CybJs
 
 source ./lib/transport.fish
-source ./lib/argparse_selectors.fish
+source ./lib/serialize_selector.fish
 
 argparse -N1 'j/json' 'f/frame=' -- $argv; or exit (llerr -e2 "bad usage")
 
@@ -14,10 +14,11 @@ __cyb_op_init; or exit 1
 echo $argv[1] >$_CYBW_REQ/script.js
 jq -n --args -c '$ARGS.positional' -- $argv[2..-1] >$_CYBW_REQ/args.json
 
-# Sélecteur d'iframe (choix de frame), compilé en frame.json. `element` factice :
-# le serveur (find_frame) n'utilise que le filtre `iframe`, pas querySelector.
+# Sélecteur d'iframe (choix de frame), compilé en frame.json. `-f` reçoit le
+# filtre iframe brut ; on fabrique le sélecteur `iframe` + ce filtre. `element`
+# factice : le serveur (find_frame) n'utilise que le filtre `iframe`.
 if set -q _flag_frame
-    argparse_selectors -e iframe --frame "$_flag_frame" >$_CYBW_REQ/frame.json
+    serialize_selector "iframe --frame '$_flag_frame'" >$_CYBW_REQ/frame.json
     or exit (llerr -e2 "bad frame selector")
 end
 
