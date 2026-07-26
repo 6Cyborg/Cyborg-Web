@@ -2,6 +2,7 @@
 # restaure un profil depuis <src>.tar.xz (WIPE puis set : cookies + localStorage
 # seedé avant le JS de page → pas de redirect). POST /set-profile.
 set -lx log_registry CybSetProfile
+source ./lib/transport.fish
 __cyb_op_init; or exit 1
 
 argparse -N1 -X1 -- $argv; or exit (llerr -e2 "usage: cybw set-profile <src.tar.xz>")

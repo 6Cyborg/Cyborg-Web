@@ -1,10 +1,13 @@
 #!/usr/bin/env fish
 #
-# Traite si besoin le popup RecaptchaV2.
+# Traite si besoin le popup RecaptchaV2. invisible.fish/normal.fish l'appellent.
 #
-# invisible.fish et normal.fish sont à utilisé plutôt car ils déclenchent recaptcha puis le traite.
+# Args : les OUTCOMES du site (états de succès/échec attendus), en sélecteurs
+# `--`-délimités. Sortie stdout : ligne 1 = index 0-based de l'outcome gagnant ;
+# lignes suivantes = ses hits. Sort 1 si rien.
 
-set -l ct (status filename | path resolve | path dirname)/res-cyb
+set -l CYB_RV2_HOME (status filename | path resolve | path dirname)
+source $CYB_RV2_HOME/selectors.fish
 
 argparse -N1 -- $argv; or exit 2
 set -l outcomes $argv
@@ -17,8 +20,6 @@ end
 
 function _transcribe -a url
     # TODO : _transcribe doit connaître language
-
-    # Psq j'oublie tt le temps de le définir
     set -q GROQ_API_KEY
     or set GROQ_API_KEY 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
 
@@ -37,46 +38,50 @@ function _transcribe -a url
     return 0
 end
 
-set -l start_race (cybw race -V $ct/nav_audio $outcomes)
+# nav_audio (index 0) vs outcomes (index 1..N) : popup ouvert, ou succès direct ?
+set -l start_race (cybw race -V -- $rc_nav_audio -- $outcomes)
 switch $start_race[1]
-    case $ct/nav_audio
+    case 0
         llinf "Recaptcha V2 popup ouvert"
 
-    case $outcomes
-        # Pas de popup ouvert
-        llinf "Recaptcha V2 réussi sans popup <3"
-        printf '%s\n' $start_race[2]
+    case ''
         exit 1
+
+    case '*'
+        # Pas de popup ouvert : un outcome a gagné.
+        llinf "Recaptcha V2 réussi sans popup <3"
+        math $start_race[1] - 1
+        printf '%s\n' $start_race[2..-1]
+        exit 0
 end
 
 llwait "Sélection du mode audio"
-cybw tap $ct/nav_audio
-set -l audio_race (cybw race $ct/audio_link $ct/audio_refusal)
+cybw tap $rc_nav_audio
+set -l audio_race (cybw race -- $rc_audio_link -- $rc_audio_refusal)
 switch $audio_race[1]
-    case $ct/audio_link
+    case 0
         llinf "Mode audio autorisé"
 
-    case $ct/audio_refusal
+    case '*'
         # C'est à cause de l'IP
         exit (llerr -e1 "Mode audio refusé par RecaptchaV2.")
 end
 
 for attempt in (seq 15)
-    if $attempt -ne 1
-        cybw tap $ct/reload
-        cybw none -V $ct/audio_bad
+    if test $attempt -ne 1
+        cybw tap $rc_reload
+        cybw none -- $rc_audio_bad -V
     end
 
     sleep 1
 
-    set -l audio_btn (cybw query -V $ct/audio_link)
+    set -l audio_btn (cybw query -V -- $rc_audio_link)
     set -l audio_url (pup '[href]' 'attr{href}' <$audio_btn/html | string replace -a '&amp;' '&')
 
-    set -l audio_url ()
     llwait "Tentative #$attempt sur $(llcode $audio_url)"
 
-    if not set -l audio_size (curl -sI $audio_url | rg -m1 -i 'content-length' | rg -o '\d+');
-       or test $audio_size -eq 0
+    if not set -l audio_size (curl -sI $audio_url | rg -m1 -i 'content-length' | rg -o '\d+')
+        or test $audio_size -eq 0
         llwar "Audio vide."
         continue
     end
@@ -85,22 +90,25 @@ for attempt in (seq 15)
         llwar "Transcription impossible"
         continue
     end
- 
-    cybw input -t "$audio_text" $ct/audio_input
-    cybw tap $ct/submit
 
-    # TODO : erreur de traduction
-    set -l end_race (cybw race -V $ct/audio_bad $outcomes)
+    cybw input --text "$audio_text" -- $rc_audio_input
+    cybw tap $rc_submit
+
+    # audio_bad (index 0) vs outcomes (index 1..N)
+    set -l end_race (cybw race -V -- $rc_audio_bad -- $outcomes)
     switch $end_race[1]
-        case $ct/audio_bad
+        case 0
             llwar "Transcription mauvaise : $(llcode (cat $end_race[2]/text))"
             continue
 
-        case $outcomes
-            printf '%s\n' $end_race[1]
+        case ''
+            continue
+
+        case '*'
+            math $end_race[1] - 1
+            printf '%s\n' $end_race[2..-1]
             exit 0
     end
 end
 
 exit 1
-

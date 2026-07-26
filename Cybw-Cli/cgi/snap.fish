@@ -1,6 +1,7 @@
 #!/usr/bin/env fish
 # capture page+frames+screenshot+har dans $CYB_DIR/snaps/<NNNN>. POST /snap.
 set -lx log_registry CybSnap
+source ./lib/transport.fish
 __cyb_op_init; or exit 1
 
 argparse v/verbose -- $argv; or exit (llerr -e2 "bad usage")

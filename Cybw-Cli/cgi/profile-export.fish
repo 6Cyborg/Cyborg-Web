@@ -2,6 +2,7 @@
 # exporte tout le profil (cookies + localStorage/sessionStorage) vers
 # <dest>.tar.xz. POST /export-profile.
 set -lx log_registry CybExportProfile
+source ./lib/transport.fish
 __cyb_op_init; or exit 1
 
 argparse -N1 -X1 -- $argv; or exit (llerr -e2 "usage: cybw export-profile <dest.tar.xz>")

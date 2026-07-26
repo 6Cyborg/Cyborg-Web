@@ -8,6 +8,7 @@
 # `headers`, et tableau `cookies`).
 
 set -lx log_registry CybNet
+source ./lib/transport.fish
 __cyb_op_init; or exit 1
 
 argparse "u/url=" "T/timeout=" -- $argv; or exit (llerr -e2 "bad usage")
