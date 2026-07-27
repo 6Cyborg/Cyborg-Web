@@ -26,8 +26,8 @@ and speaks the contract défini par `Cyborg-User-SDK/cyborg.fish`:
     POST /snap            (tar out)       -> page.html + <frame_id>.html + screenshot.png + network_page.har
     POST /cookie (tar in/out)             -> cookie.txt (header Cookie) +
          user-agent.txt ; url depuis fichier `url`
-    POST /net    (tar in/out)             -> request.har : l'objet HAR `request`
-         (cookies du store inclus) de la 1ere requete matchant le glob ;
+    POST /net    (tar in/out)             -> entry.har : entree HAR {request, response}
+         (`response` null au stade `request`, rempli au stade `response`) ;
          url + timeout depuis fichiers `url` / `timeout`
     GET  /status                          -> {"page": bool, "last_action": rfc3339}
 
@@ -558,14 +558,23 @@ async def cookie():
 async def net():
     """Arme l'interception Fetch (ephemere) et attend la PROCHAINE requete dont
     l'url matche le glob `url` (wildcards `*`/`?`), jusqu'a `timeout` secondes.
-    Relache la requete, desactive Fetch, et renvoie `request.har` = l'objet HAR
-    `request` reconstruit a la main. Si rien ne matche avant T : tar vide (pas
-    de request.har). `url`/`timeout` toujours fournis par le client (fichiers du
-    tar de requete `url` / `timeout`).
+    Relache la requete, desactive Fetch, et renvoie `entry.har` = une entree HAR
+    {request, response} ou `request` est reconstruit a la main. Si rien ne matche
+    avant T : tar vide (pas de entry.har). `url`/`timeout`/`stade` toujours fournis
+    par le client (fichiers du tar de requete `url` / `timeout` / `stade`).
+
+    `stade` (`request` | `response`, defaut `response`) choisit a quel stade Fetch
+    relache :
+      * `request`  -> interception au stade REQUEST : on ne voit que la requete
+                      sortante, `response` = `null`.
+      * `response` -> interception au stade RESPONSE : on attend la reponse et on
+                      remplit `response` au format HAR (status, headers, body via
+                      `Fetch.getResponseBody`). Body indisponible sur les redirects
+                      (3xx) -> `content` vide.
 
     Les cookies sont injectes depuis le cookie store (`Network.getCookies`), ce
     qui inclut les PARTITIONNES (CHIPS, ex. `cf_clearance` Cloudflare) que l'inter-
-    ception Fetch ne voit pas -> le request.har est rejouable tel quel (Cookie +
+    ception Fetch ne voit pas -> le request est rejouable tel quel (Cookie +
     User-Agent dans `headers`, plus le tableau `cookies`)."""
     _touch()
 
@@ -573,15 +582,53 @@ async def net():
         members = read_tar_dir(req_tar)
     url_glob = members.get("url", b"").decode("utf-8").rstrip("\n")
     timeout = float(members.get("timeout", b"60").decode("utf-8").rstrip("\n"))
+    stade = members.get("stade", b"response").decode("utf-8").rstrip("\n") or "response"
+    want_response = stade != "request"
+    request_stage = (cdp.fetch.RequestStage.RESPONSE if want_response
+                     else cdp.fetch.RequestStage.REQUEST)
 
     tab = await _tab()
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
 
+    async def _capture_response(ev):
+        # Objet HAR `response` depuis un event Fetch pause au stade RESPONSE.
+        # `getResponseBody` DOIT etre appele PENDANT la pause (avant continue_request
+        # / disable). Indisponible sur les redirects (3xx) -> content vide.
+        header_pairs = [(h.name, h.value) for h in (ev.response_headers or [])]
+        ctype = next((v for k, v in header_pairs if k.lower() == "content-type"), "")
+        location = next((v for k, v in header_pairs if k.lower() == "location"), "")
+
+        text, size, encoding = "", -1, None
+        try:
+            body, b64 = await tab.send(cdp.fetch.get_response_body(request_id=ev.request_id))
+            text = body
+            size = len(base64.b64decode(body)) if b64 else len(body.encode("utf-8"))
+            encoding = "base64" if b64 else None
+        except Exception:
+            pass  # redirect / body indisponible
+
+        content = {"size": max(size, 0), "mimeType": ctype, "text": text}
+        if encoding:
+            content["encoding"] = encoding
+
+        return {
+            "status": ev.response_status_code or 0,
+            "statusText": ev.response_status_text or "",
+            "httpVersion": "HTTP/1.1",
+            "headers": [{"name": n, "value": v} for n, v in header_pairs],
+            "cookies": [],
+            "content": content,
+            "redirectURL": location,
+            "headersSize": -1,
+            "bodySize": size,
+        }
+
     async def _on_paused(ev, conn=None):
-        # 1ere requete matchee -> on memorise l'objet brut, puis on relache.
+        # 1ere requete matchee -> on memorise (request, response?), puis on relache.
         try:
             if not fut.done():
-                fut.set_result(ev.request)
+                har_response = await _capture_response(ev) if want_response else None
+                fut.set_result((ev.request, har_response))
         finally:
             try:
                 await tab.send(cdp.fetch.continue_request(request_id=ev.request_id))
@@ -589,18 +636,18 @@ async def net():
                 pass
 
     tab.add_handler(cdp.fetch.RequestPaused, _on_paused)
-    request = None
+    captured = None
     try:
         await tab.send(cdp.fetch.enable(patterns=[
             cdp.fetch.RequestPattern(
                 url_pattern=url_glob,
-                request_stage=cdp.fetch.RequestStage.REQUEST,
+                request_stage=request_stage,
             )
         ]))
         try:
-            request = await asyncio.wait_for(fut, timeout=timeout)
+            captured = await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError:
-            request = None
+            captured = None
     finally:
         try:
             await tab.send(cdp.fetch.disable())  # libere les requetes en pause
@@ -608,8 +655,10 @@ async def net():
             pass
         tab.remove_handler(cdp.fetch.RequestPaused, _on_paused)
 
-    if request is None:
+    if captured is None:
         return quart.Response(build_tar({}), mimetype="application/x-tar")
+
+    request, har_response = captured
 
     # Reconstruit l'objet HAR `request` depuis l'objet CDP, enrichi des cookies du
     # store (`getCookies` voit les PARTITIONNES/CHIPS comme cf_clearance, invisibles
@@ -641,7 +690,11 @@ async def net():
             "text": body,
         }
 
-    files = {"request.har": json.dumps(har_request).encode("utf-8")}
+    # Entree HAR : `request` reconstruit + `response` (null au stade REQUEST, rempli
+    # au format HAR au stade RESPONSE).
+    har_entry = {"request": har_request, "response": har_response}
+
+    files = {"entry.har": json.dumps(har_entry).encode("utf-8")}
     return quart.Response(build_tar(files), mimetype="application/x-tar")
 
 
