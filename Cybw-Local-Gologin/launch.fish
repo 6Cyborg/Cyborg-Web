@@ -10,7 +10,7 @@ llwait "starting gologin in $(llcode $ddir)"
 
 argparse -N1 -X1 "f/fingerprint="  -- $argv; or return 2
 
-set -l profile_dir $argv[1]
+set -l profile_dir (path resolve -- $argv[1])
 
 # Structure FS profile :
 set -l profile__geo_json $profile_dir/.geo.json
@@ -194,8 +194,8 @@ jq -n --arg ts $now --arg device $id --arg fpfile $fpfile --arg proxy "$proxy" \
 # Importe d'abord
 if test -s $profile_export
     llwait "restauration du profile"
-    cybw set-profile $profile_export
-    or exit (llerr -e1 "Échec de set-profile")
+    cybw profile-set $profile_export
+    or exit (llerr -e1 "Échec de profile-set")
 else
     llwar "profile vierge"
 end

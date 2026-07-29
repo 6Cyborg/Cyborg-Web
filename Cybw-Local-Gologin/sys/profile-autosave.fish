@@ -15,7 +15,7 @@ while true
     set -l destdir (path dirname -- $dest)
     set -l tmp (mktemp --tmpdir=$destdir .state.XXXXXX)
 
-    if cybw export-profile $tmp >/dev/null 2>&1
+    if cybw profile-export $tmp >/dev/null 2>&1
         mv -f $tmp $dest
         llinf "autosaved"
     else
