@@ -18,11 +18,10 @@ set -l archive "$browser_dir/release.tar.gz"
 set -l dest "$browser_dir/release"
 set -l chrome "$dest/chrome"
 
-# --- Compat lib : Orbita (build Debian) réclame libcurl-gnutls.so.4, que
-# Fedora ne fournit pas. On expose libcurl.so.4 sous ce nom dans usrlib/ ;
-# launch l'ajoute à LD_LIBRARY_PATH. Fait aussi office de sanity check.
-set -l libcurl (ldconfig -p | string match -rg 'libcurl\.so\.4.*=> (\S+)' | head -1)
-test -e "$libcurl"; or exit (llerr -e9 "libcurl.so.4 introuvable — installe le paquet « libcurl »")
+# Télécharge les libs manquantes
+# TODO: Utilisé ldd
+set -l ldconfig (command -v ldconfig; or echo /sbin/ldconfig)
+set -l libcurl ($ldconfig -p | string match -rg 'libcurl\.so\.4.*=> (\S+)' | head -1)
 mkdir -p usrlib
 ln -sf $libcurl usrlib/libcurl-gnutls.so.4
 llinf "compat : usrlib/libcurl-gnutls.so.4 → $libcurl"
