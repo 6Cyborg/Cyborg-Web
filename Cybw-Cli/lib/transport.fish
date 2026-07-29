@@ -8,19 +8,18 @@ function __cyb_op_init -d "vérifie les pré-requis et (re)génère les buffers 
 
     # pour le parallélisme, il faut séparé le dossier de travail de chaque tâche :
     # FIXME : CYBW_CALL conflicts with pid re-use
-    set -gx CYBW_CALL $CYB_DIR/call-$fish_pid
+    set -gx CYBW_CALL $CYB_DIR/.cybw-calls/$(date -Inanoseconds)
 
-    set -gx _CYBW_REQ $CYBW_CALL/.req
-    set -gx _CYBW_RESP $CYBW_CALL/.resp
-    set -gx _CYBW_ERR $CYBW_CALL/.err
+    set -gx _CYBW_REQ $CYBW_CALL/req
+    set -gx _CYBW_RESP $CYBW_CALL/resp
+    set -gx _CYBW_ERR $CYBW_CALL/err
 
-    rm -rf $CYBW_CALL
     mkdir -p $_CYBW_REQ
 end
 
 function _cyb_op -a name
-    set -l req_pack $CYBW_CALL/.pack-req.tar
-    set -l resp_pack $CYBW_CALL/.pack-resp.tar
+    set -l req_pack $CYBW_CALL/pack-req.tar
+    set -l resp_pack $CYBW_CALL/pack-resp.tar
 
     tar -c -C $_CYBW_REQ -f $req_pack .
 

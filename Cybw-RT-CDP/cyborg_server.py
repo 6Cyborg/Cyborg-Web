@@ -112,6 +112,7 @@ from nodriver import cdp
 
 import cyborg_dom
 import cyborg_har
+import cyborg_profile
 from cyborg_dom import (
     download_req_tar, load_selector, load_selectors, read_tar_dir, build_tar,
     list_frame_ids, get_frame_by_id, collect_frames, find_frame,
@@ -694,186 +695,38 @@ async def net():
     return quart.Response(build_tar(files), mimetype="application/x-tar")
 
 
-# ── Profil : cookies + localStorage/sessionStorage ────────────────────────────
-# Restaurer le localStorage AVANT le 1er script de page : un token vivant
-# UNIQUEMENT en localStorage (pas en cookie) doit être présent au load, sinon
-# l'app (ex. panel admin) redirige. Seul `Page.addScriptToEvaluateOnNewDocument`
-# le garantit (docstring CDP : « before loading frame's scripts »), en main world
-# (`world_name=None`). `dom_storage.set_dom_storage_item` exigerait un document
-# same-origin déjà vivant → trop tard ; réservé à l'export (lecture).
-
-def _cookie_origin(c) -> str:
-    """Origine approximative d'un cookie (énumération + wipe par origine)."""
-    host = (c.domain or "").lstrip(".")
-    return f"{'https' if c.secure else 'http'}://{host}"
-
-
-def _cookie_to_param(c):
-    """network.Cookie → network.CookieParam : round-trip complet (HttpOnly,
-    SameSite, partition_key/CHIPS préservés). source_port=-1 (unspecified) → None.
-    expires : Cookie.from_json le désérialise en float NU, mais CookieParam.to_json
-    appelle .to_json() dessus → on le re-type en TimeSinceEpoch (sinon AttributeError
-    sur tout cookie non-session).
-    __Host- : Chrome INTERDIT l'attribut Domain (cookie host-only) → on omet domain
-    et on passe par `url`, sinon setCookies rejette « Invalid cookie fields »."""
-    host_only = c.name.startswith("__Host-")
-    url = None
-    if host_only:
-        url = f"https://{(c.domain or '').lstrip('.')}{c.path or '/'}"
-    return cdp.network.CookieParam(
-        name=c.name, value=c.value, url=url,
-        domain=(None if host_only else c.domain), path=c.path,
-        secure=c.secure, http_only=c.http_only, same_site=c.same_site,
-        expires=(cdp.network.TimeSinceEpoch(c.expires) if c.expires is not None else None),
-        priority=c.priority, source_scheme=c.source_scheme,
-        source_port=(c.source_port if c.source_port not in (None, -1) else None),
-        partition_key=c.partition_key,
-    )
-
-
-def _seed_js(origin: str, local: dict, session: dict) -> str:
-    """Script seedé : gardé par origine, pose le storage avant le JS de page.
-    `localStorage.clear()` interne → ordre clear→set atomique par origine."""
-    return (
-        f"if(location.origin==={json.dumps(origin)}){{try{{"
-        f"localStorage.clear();"
-        f"var L={json.dumps(local)};for(var k in L)localStorage.setItem(k,L[k]);"
-        f"var S={json.dumps(session)};for(var k in S)sessionStorage.setItem(k,S[k]);"
-        f"}}catch(e){{}}}}"
-    )
-
-
-async def _wait_ready(tab, timeout: float = 15.0) -> None:
-    """Attend `document.readyState=='complete'` (borné). Best-effort : le seed a
-    déjà tourné au commit de la nav ; ceci laisse seulement la page se poser."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            res = await tab.send(cdp.runtime.evaluate(
-                expression="document.readyState", return_by_value=True))
-            if res and res[0] and res[0].value == "complete":
-                return
-        except Exception:
-            return
-        await asyncio.sleep(0.2)
+# ── Profil : cookies ──────────────────────────────────────────────────────────
+# Toute la mécanique CDP (jar global, wipe par origine, round-trip CookieParam)
+# vit dans cyborg_profile.py, layout du tar inclus. Ici : uniquement le passage
+# tar ↔ mémoire. Le DOM storage est HORS PÉRIMÈTRE, voir cyborg_profile.py pour
+# les raisons de fond (il exige un frame vivant, donc une navigation par origine).
 
 
 @app.post("/profile-save")
 async def profile_save():
-    """Exporte TOUT le profil atteignable (sans URL) : cookies complets +
-    localStorage/sessionStorage par origine. Origines = domaines de cookies ∪
-    arbre de frames ∪ page courante. Tar `{cookies.json, storage/<origin>.json}`."""
+    """Exporte le jar de cookies complet (sans URL, sans navigation).
+    Tar `{cookies.json}`."""
     _touch()
+
     tab = await _tab()
-    await tab.send(cdp.dom_storage.enable())
+    profile = await cyborg_profile.export_profile(tab)
 
-    cookies = await tab.send(cdp.storage.get_cookies()) or []
-
-    origins: set[str] = {_cookie_origin(c) for c in cookies}
-    tree = await tab.send(cdp.page.get_frame_tree())
-
-    def _walk(node):
-        u = getattr(node.frame, "url", None)
-        if u and u.startswith(("http://", "https://")):
-            p = urlsplit(u)
-            origins.add(f"{p.scheme}://{p.netloc}")
-        for ch in (node.child_frames or []):
-            _walk(ch)
-    _walk(tree)
-
-    localStorages: dict[str, dict] = {}
-    for o in origins:
-        entry = {"local": {}, "session": {}}
-        for is_local, key in ((True, "local"), (False, "session")):
-            try:
-                sid = cdp.dom_storage.StorageId(is_local_storage=is_local, security_origin=o)
-                items = await tab.send(cdp.dom_storage.get_dom_storage_items(sid))
-                entry[key] = {it[0]: it[1] for it in (items or [])}  # Item = [k, v]
-            except Exception:
-                pass
-        if entry["local"] or entry["session"]:
-            localStorages[o] = entry
-
-    files = {"cookies.json": json.dumps([c.to_json() for c in cookies]).encode("utf-8")}
-    for o, e in localStorages.items():
-        safe = o.replace("://", "_").replace(":", "_").replace("/", "_")
-        files[f"localStorages/{safe}.json"] = json.dumps({"origin": o, **e}).encode("utf-8")
-
-    return quart.Response(build_tar(files), mimetype="application/x-tar")
+    return quart.Response(build_tar(cyborg_profile.to_tar_files(profile)),
+                          mimetype="application/x-tar")
 
 
 @app.post("/profile-restore")
 async def profile_restore():
-    """Restaure un profil : WIPE (cookies + données par origine, service workers
-    inclus via « all ») puis set cookies, puis seed localStorage AVANT le JS de
-    page (anti-redirect) via addScriptToEvaluateOnNewDocument + navigate."""
+    """Restaure un profil depuis le tar produit par /profile-save (WIPE, jamais
+    un merge)."""
     _touch()
 
     with download_req_tar(await quart.request.get_data()) as req_tar:
         members = read_tar_dir(req_tar)
-
-    cookies_json = (json.loads(members["cookies.json"].decode("utf-8"))
-                    if "cookies.json" in members else [])
-    localStorages: dict[str, dict] = {}
-    for name, raw in members.items():
-        if name.startswith("storage/") and name.endswith(".json"):
-            d = json.loads(raw.decode("utf-8"))
-            localStorages[d["origin"]] = {"local": d.get("local", {}), "session": d.get("session", {})}
+    profile = cyborg_profile.from_tar_members(members)
 
     tab = await _tab()
-    cooks = [cdp.network.Cookie.from_json(c) for c in cookies_json]
-    origins = set(localStorages) | {_cookie_origin(c) for c in cooks}
-
-    # WIPE (jamais un merge).
-    await tab.send(cdp.storage.clear_cookies())
-    for o in origins:
-        try:
-            await tab.send(cdp.storage.clear_data_for_origin(origin=o, storage_types="all"))
-        except Exception:
-            pass
-
-    # COOKIES (sans navigation ; HttpOnly/CHIPS réinjectés). Chrome rejette TOUT le
-    # batch (« Invalid cookie fields ») dès qu'un seul cookie est malformé → on
-    # retombe en pose 1-à-1 pour isoler et logger le(s) fautif(s), poser le reste,
-    # et ne pas faire échouer le set-profile entier.
-    if cooks:
-        params = [_cookie_to_param(c) for c in cooks]
-        try:
-            await tab.send(cdp.storage.set_cookies(params))
-        except Exception as batch_err:
-            print(f"[cyborg] set-profile: batch set_cookies KO ({batch_err!r}) → pose 1-à-1",
-                  file=sys.stderr, flush=True)
-            ok = skipped = 0
-            for p in params:
-                try:
-                    await tab.send(cdp.storage.set_cookies([p]))
-                    ok += 1
-                except Exception as e:
-                    skipped += 1
-                    print(f"[cyborg] set-profile: cookie REJETÉ ({e!r}) :: {json.dumps(p.to_json())}",
-                          file=sys.stderr, flush=True)
-            print(f"[cyborg] set-profile: {ok} posés, {skipped} ignorés",
-                  file=sys.stderr, flush=True)
-
-    # SEED localStorage avant le 1er script de page (un identifier par origine).
-    script_ids = []
-    for o, e in localStorages.items():
-        sid = await tab.send(cdp.page.add_script_to_evaluate_on_new_document(
-            source=_seed_js(o, e["local"], e["session"])))
-        script_ids.append(sid)
-
-    # NAVIGATE séquentiel : le seed tourne au commit de chaque document.
-    for o in localStorages:
-        res = await tab.send(cdp.page.navigate(o + "/"))
-        err = res[2] if isinstance(res, (list, tuple)) and len(res) > 2 else None
-        if err:
-            print(f"[cyborg] set-profile nav {o} failed: {err}", file=sys.stderr, flush=True)
-        await _wait_ready(tab)
-
-    # CLEANUP après la dernière nav : sinon le seed (avec son localStorage.clear)
-    # se rejoue sur chaque page suivante de l'utilisateur et détruit l'état vivant.
-    for sid in script_ids:
-        await tab.send(cdp.page.remove_script_to_evaluate_on_new_document(sid))
+    await cyborg_profile.restore_profile(tab, profile)
 
     return quart.Response(build_tar({}), mimetype="application/x-tar")
 
