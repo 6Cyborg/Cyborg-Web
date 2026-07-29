@@ -165,8 +165,9 @@ def _parse_locator_file(raw: bytes) -> Optional[CssSelector]:
 
 # ── tar (de)serialisation ─────────────────────────────────────────────────────
 
-def download_req_tar(body: bytes) -> tarfile.TarFile:
-    return tarfile.open(fileobj=io.BytesIO(body), mode="r:*")
+def download_req_tar(body: str | bytes) -> tarfile.TarFile:
+    body_bytes = body if isinstance(body, bytes) else body.encode('utf8')
+    return tarfile.open(fileobj=io.BytesIO(body_bytes), mode="r:*")
 
 
 def _normalize_tar_path(p: str) -> str:
@@ -181,9 +182,12 @@ def load_selector(req_tar: tarfile.TarFile, name: str) -> Optional[CssSelector]:
     pour la frame d'évaluation (`frame.json`)."""
     target = _normalize_tar_path(name) + ".json"
     for ent in req_tar.getmembers():
-        if ent.isfile() and _normalize_tar_path(ent.name) == target:
-            with req_tar.extractfile(ent) as f:
-                return _parse_locator_file(f.read())
+        if _normalize_tar_path(ent.name) != target:
+            continue
+        buf = req_tar.extractfile(ent)
+        if buf is not None:
+            with buf as f:
+                    return _parse_locator_file(f.read())
     return None
 
 
@@ -198,13 +202,20 @@ def load_selectors(req_tar: tarfile.TarFile,
     for ent in req_tar.getmembers():
         if not ent.isfile():
             continue
+
         name = _normalize_tar_path(ent.name)
         if prefix and not name.startswith(prefix):
             continue
+
         rel = name[len(prefix):]
         if "/" in rel or not rel.endswith(".json"):
             continue
-        with req_tar.extractfile(ent) as f:
+
+        buf = req_tar.extractfile(ent)
+        if buf is None:
+            continue
+
+        with buf as f:
             sel = _parse_locator_file(f.read())
         if sel is not None:
             out[rel[:-len(".json")]] = sel
@@ -217,8 +228,9 @@ def read_tar_dir(req_tar: tarfile.TarFile) -> dict[str, bytes]:
     les `.isfile()` (dirs/symlinks/… ignorés, voulu)."""
     out: dict[str, bytes] = {}
     for ent in req_tar.getmembers():
-        if ent.isfile():
-            with req_tar.extractfile(ent) as f:
+        buf = req_tar.extractfile(ent)
+        if buf is not None:
+            with buf as f:
                 out[_normalize_tar_path(ent.name)] = f.read()
     return out
 
