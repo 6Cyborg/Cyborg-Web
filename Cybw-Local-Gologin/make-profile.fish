@@ -53,7 +53,7 @@ llinf "fingerprint obtenu !"
 # token longue durée conservé dans arg_token.
 
 # --- 3) Sanity check
-if not set -l data (./parse-profile.fish $output_dir/$id.json)
+if not set -f data (./parse-profile.fish $output_dir/$id.json)
     exit (llerr -e1 "fingerprint non désérialisable")
 end
 

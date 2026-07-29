@@ -171,9 +171,11 @@ set -l rt_log $ddir/cyb-runtime-cdp.log
 set -l rt_url http://127.0.0.1:9224
 llwait "lancement de Cyborg"
 
+pushd (path dirname -- $runtime)
 setpriv --pdeathsig TERM -- env CDP_PORT=$cdp_port uv run $runtime >$rt_log 2>&1 &
 set -gx CYBRT_PID $last_pid
 disown
+popd
 
 wait_ready $CYBRT_PID $rt_url/status
 or return (llerr -e1 "Cyborg n'a pas été prêt")
@@ -199,14 +201,14 @@ jq -n --arg ts $now --arg device $id --arg fpfile $fpfile --arg proxy "$proxy" \
 # Importe d'abord
 if test -s $profile_export
     llwait "restauration du profile"
-    cybw profile-set $profile_export
+    cybw profile-restore $profile_export
     or exit (llerr -e1 "Échec de profile-set")
 else
     llwar "profile vierge"
 end
 
 # Démarre l'exportateur automatique
-setpriv --pdeathsig TERM -- $sys/profile-autosave.fish (path resolve $profile_export) &
+setpriv --pdeathsig TERM -- $sys/profile-autosave.fish &
 set -gx CYB_SAVER_PID $last_pid
 disown
 
