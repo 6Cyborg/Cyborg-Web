@@ -110,7 +110,7 @@ cp $sys/udd-preferences.json $ddir/Default/Preferences
 cp $sys/udd-bookmarks.json $ddir/Default/Bookmarks
 if set -l init_cookies_query (jq -re '.createCookiesTableQuery' <$fpfile)
     for db in $ddir/Default/Network/Cookies $ddir/Default/Cookies
-        $sys/sqlite-query.py "$db" "$init_cookies_query"
+        uv run $sys/sqlite-query.py "$db" "$init_cookies_query"
     end
 end
 
