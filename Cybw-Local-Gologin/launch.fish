@@ -129,8 +129,6 @@ or return (llerr -e1 "Non généré : orbita.config")
 set -l cdp_port (get_free_port)
 or return (llerr -e1 "aucun port libre trouvé")
 
-# Args Orbita (ordre exact gologin.py:199-209 == bélier). Pas de proxy : le
-# profil ne sert qu'au fingerprint (proxy seulement signalé par parse-profile).
 set -l args \
     --remote-debugging-port=$cdp_port \
     --password-store=basic \
@@ -140,6 +138,13 @@ set -l args \
     --disable-features=PrintCompositorLPAC \
     --window-size=(string replace x , $res) \
     --user-data-dir=$ddir
+
+set -q CYBW_HEADED
+or set -a args --headless
+
+# TODO: ajouter --no-sandbox qd chrome_sandbox est mal configuré seulement
+set -a args --no-sandbox
+llwar "not sandboxing chrome"
 
 # Orbita dépend de libcurl-gnutls.so.4
 # ./usrlib/ contient ceux que Fedora ne fournit pas.
