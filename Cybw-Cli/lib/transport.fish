@@ -8,7 +8,7 @@ function __cyb_op_init -d "vérifie les pré-requis et (re)génère les buffers 
 
     # pour le parallélisme, il faut séparé le dossier de travail de chaque tâche :
     # FIXME : CYBW_CALL conflicts with pid re-use
-    set -gx CYBW_CALL $CYB_DIR/.cybw-calls/$(date -Inanoseconds)
+    set -gx CYBW_CALL $CYB_DIR/.cybw-calls/$(date -In)
 
     set -gx _CYBW_REQ $CYBW_CALL/req
     set -gx _CYBW_RESP $CYBW_CALL/resp
