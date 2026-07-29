@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["nodriver"]
-# ///
+#!/usr/bin/env -S uv run
 """Cyborg `/tap` — clic gauche FIABLE (toutes techniques Playwright A-F en dur).
 
 TOUT EST TOUJOURS ACTIVE : aucun toggle, aucun flag, un seul chemin de code par

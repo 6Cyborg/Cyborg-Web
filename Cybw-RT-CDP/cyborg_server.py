@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["nodriver", "quart"]
-# ///
+#!/usr/bin/env -S uv run
 """Cyborg `/cyborg` data-plane server (Host-Android side).
 
 Long-running HTTP server that sits next to Chrome and executes query/tap/fill
@@ -762,8 +758,8 @@ async def _wait_ready(tab, timeout: float = 15.0) -> None:
         await asyncio.sleep(0.2)
 
 
-@app.post("/export-profile")
-async def export_profile():
+@app.post("/profile-save")
+async def profile_save():
     """Exporte TOUT le profil atteignable (sans URL) : cookies complets +
     localStorage/sessionStorage par origine. Origines = domaines de cookies ∪
     arbre de frames ∪ page courante. Tar `{cookies.json, storage/<origin>.json}`."""
@@ -785,7 +781,7 @@ async def export_profile():
             _walk(ch)
     _walk(tree)
 
-    storage: dict[str, dict] = {}
+    localStorages: dict[str, dict] = {}
     for o in origins:
         entry = {"local": {}, "session": {}}
         for is_local, key in ((True, "local"), (False, "session")):
@@ -796,18 +792,18 @@ async def export_profile():
             except Exception:
                 pass
         if entry["local"] or entry["session"]:
-            storage[o] = entry
+            localStorages[o] = entry
 
     files = {"cookies.json": json.dumps([c.to_json() for c in cookies]).encode("utf-8")}
-    for o, e in storage.items():
+    for o, e in localStorages.items():
         safe = o.replace("://", "_").replace(":", "_").replace("/", "_")
-        files[f"storage/{safe}.json"] = json.dumps({"origin": o, **e}).encode("utf-8")
+        files[f"localStorages/{safe}.json"] = json.dumps({"origin": o, **e}).encode("utf-8")
 
     return quart.Response(build_tar(files), mimetype="application/x-tar")
 
 
-@app.post("/set-profile")
-async def set_profile():
+@app.post("/profile-restore")
+async def profile_restore():
     """Restaure un profil : WIPE (cookies + données par origine, service workers
     inclus via « all ») puis set cookies, puis seed localStorage AVANT le JS de
     page (anti-redirect) via addScriptToEvaluateOnNewDocument + navigate."""
@@ -818,15 +814,15 @@ async def set_profile():
 
     cookies_json = (json.loads(members["cookies.json"].decode("utf-8"))
                     if "cookies.json" in members else [])
-    storage: dict[str, dict] = {}
+    localStorages: dict[str, dict] = {}
     for name, raw in members.items():
         if name.startswith("storage/") and name.endswith(".json"):
             d = json.loads(raw.decode("utf-8"))
-            storage[d["origin"]] = {"local": d.get("local", {}), "session": d.get("session", {})}
+            localStorages[d["origin"]] = {"local": d.get("local", {}), "session": d.get("session", {})}
 
     tab = await _tab()
     cooks = [cdp.network.Cookie.from_json(c) for c in cookies_json]
-    origins = set(storage) | {_cookie_origin(c) for c in cooks}
+    origins = set(localStorages) | {_cookie_origin(c) for c in cooks}
 
     # WIPE (jamais un merge).
     await tab.send(cdp.storage.clear_cookies())
@@ -861,13 +857,13 @@ async def set_profile():
 
     # SEED localStorage avant le 1er script de page (un identifier par origine).
     script_ids = []
-    for o, e in storage.items():
+    for o, e in localStorages.items():
         sid = await tab.send(cdp.page.add_script_to_evaluate_on_new_document(
             source=_seed_js(o, e["local"], e["session"])))
         script_ids.append(sid)
 
     # NAVIGATE séquentiel : le seed tourne au commit de chaque document.
-    for o in storage:
+    for o in localStorages:
         res = await tab.send(cdp.page.navigate(o + "/"))
         err = res[2] if isinstance(res, (list, tuple)) and len(res) > 2 else None
         if err:

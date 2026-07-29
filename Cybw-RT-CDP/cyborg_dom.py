@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["nodriver"]
-# ///
+#!/usr/bin/env -S uv run
 """Cyborg DOM/search/frame layer — primitives partagees (data-plane).
 
 Ce module porte TOUT ce qui ne depend NI de Quart (`app`) NI des handlers HTTP :

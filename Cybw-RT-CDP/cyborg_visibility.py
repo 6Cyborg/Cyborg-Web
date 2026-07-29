@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["nodriver"]
-# ///
+#!/usr/bin/env -S uv run
 """Cyborg visibility layer — décision visible / hidden / detached d'un élément,
 en COMMANDES CDP UNIQUEMENT (aucun eval JS).
 

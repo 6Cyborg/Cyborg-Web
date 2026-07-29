@@ -1,0 +1,9 @@
+[project]
+name = "cybw-rt-cdp"
+version = "0.1.0"
+description = "Cyborg /cyborg data-plane server (CDP via nodriver)"
+requires-python = ">=3.11"
+dependencies = [
+    "nodriver",
+    "quart",
+]
