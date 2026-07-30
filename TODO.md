@@ -1,6 +1,7 @@
 # 6Cyborg-Web TODO list
 
 [ ] configuration profiles (proxy, pays, langue) à revoir
+[ ] auto-wait : `cybw all` est intégré à _tap_ et _input_.
 
 ## Complex CSS selector
 
