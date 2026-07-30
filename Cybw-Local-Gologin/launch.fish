@@ -4,13 +4,16 @@ set -g log_registry cyb-launch
 
 set -l script_dir (status filename | path resolve | path dirname)
 set -l sys $script_dir/sys
-set -l ddir $script_dir/dat-userdatadir/(uuidgen)
-
-llwait "starting gologin in $(llcode $ddir)"
 
 argparse -N1 -X1 "f/fingerprint="  -- $argv; or return 2
 
 set -l profile_dir (path resolve -- $argv[1])
+
+set -l ddir $profile_dir/userdatadir-$(date -Is)
+
+llinf "GoLogin Browser is being started."
+llinf "* profile: $(llcode $profile_dir)"
+llinf "* userdatadir: $(llcode $ddir)"
 
 # Structure FS profile :
 set -l profile__geo_json $profile_dir/.geo.json
@@ -19,7 +22,6 @@ set -l profile__proxy_json $profile_dir/.proxy.json
 set -l profile_proxy_url $profile_dir/proxy
 set -l profile_app_country $profile_dir/app_country.txt
 set -l profile_app_city $profile_dir/app_city.txt
-set -l profile_export $profile_dir/state.tar.xz
 set -l profile_history_dir $profile_dir/run-history
 
 mkdir -p $profile_history_dir
@@ -180,7 +182,7 @@ popd
 wait_ready $CYBRT_PID $rt_url/status
 or return (llerr -e1 "Cyborg n'a pas été prêt")
 
-set -gx CYB_DIR $ddir
+set -gx CYB_DIR $profile_dir
 set -gx CYB_URL $rt_url
 
 # === Profil persistant : appareil vu ? trace de run, restore, save périodique ===
@@ -199,9 +201,9 @@ jq -n --arg ts $now --arg device $id --arg fpfile $fpfile --arg proxy "$proxy" \
       $version, $cdp_port}' >$profile_history_dir/$now.json
 
 # Importe d'abord
-if test -s $profile_export
+if test -f $profile_dir/cookies.json
     llwait "restauration du profile"
-    cybw profile-restore $profile_export
+    cybw profile-restore
     or exit (llerr -e1 "Échec de profile-set")
 else
     llwar "profile vierge"
