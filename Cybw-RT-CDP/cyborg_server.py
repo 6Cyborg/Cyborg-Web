@@ -227,6 +227,7 @@ async def query():
             base = f"{name}/{i:04d}"
             files[f"{base}/text"] = h.inner_text.encode("utf-8")
             files[f"{base}/html"] = h.outer_html.encode("utf-8")
+            # TODO: bbox
 
         if budget <= 0:
             break
