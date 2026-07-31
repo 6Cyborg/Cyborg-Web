@@ -32,12 +32,13 @@ echo $_flag_u >$_CYBW_REQ/url
 echo $_flag_T >$_CYBW_REQ/timeout
 echo $_flag_stade >$_CYBW_REQ/stade
 
-_cyb_op net 2>$_CYBW_ERR
-or exit (llerr -e1 "op failed: $_flag_url $(llcode (cat $_CYBW_ERR))")
+if not _cyb_op net
+    exit (llerr -e1 "op failed: $_flag_url $(llcode (cat $_CYBW_ERR)) — trace: $(llcode $CYBW_CALL)")
+end
 
 set -l entry_file $_CYBW_RESP/entry.har
 
-# Ni erreur ni résultat => deadline elapsed
+# Succès sans entry.har => rien n'a matché avant la deadline (pas une erreur)
 test -s $entry_file
 or exit (llwar -e1 "deadline elapsed")
 

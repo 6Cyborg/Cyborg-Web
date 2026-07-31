@@ -36,7 +36,7 @@ if set -q _flag_file
         cp -- $src $dest; or exit (llerr -e2 "unreadable file: $src")
 
         if test (stat -c %s -- $dest) -gt (math '1024 * 1024 * 10')
-            llwar "$(llcode $src) exceeds 10 MiB (server cap: 16 MiB total)"
+            llwar "$(llcode $src) exceeds 10 MiB (server cap: 256 MiB total)"
         end
     end
 else if set -q _flag_text
@@ -45,8 +45,9 @@ else if set -q _flag_select_value
     echo -n -- $_flag_select_value >$_CYBW_REQ/select-value
 end
 
-_cyb_op input >$_CYBW_ERR
-or exit (llerr -e1 "error: $(llcode (cat $_CYBW_ERR))")
+if not _cyb_op input
+    exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYBW_ERR)) — trace: $(llcode $CYBW_CALL)")
+end
 
 set -q CYBW_TRACE; and llinf "input $(llcode $_flag_text $_flag_file)"
 exit 0

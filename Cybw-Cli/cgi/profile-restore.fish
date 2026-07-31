@@ -11,8 +11,9 @@ argparse -X0 -- $argv; or exit (llerr -e2 "usage: cybw profile-restore")
 cp -r $CYB_DIR/cookies.json $_CYBW_REQ
 
 # Met en ligne les données à restauré
-_cyb_op profile-restore 2>$_CYBW_ERR
-or exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYBW_ERR))")
+if not _cyb_op profile-restore
+    exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYBW_ERR)) — trace: $(llcode $CYBW_CALL)")
+end
 
 set -q CYBW_TRACE; and llinf "profile restauré"
 exit 0

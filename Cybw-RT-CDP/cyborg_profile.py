@@ -3,7 +3,7 @@
 
 Ce module porte TOUTE la logique CDP de `/profile-save` et `/profile-restore` et
 la (dé)sérialisation du tar. cyborg_server.py ne fait que parser la requête HTTP
-en mémoire (`read_tar_dir`) et emballer la réponse (`build_tar`).
+en mémoire (`read_req_tar`) et emballer la réponse (`_resp_ok`).
 
 Le profil = LE JAR DE COOKIES, rien d'autre. `Storage.getCookies`/`setCookies`
 opèrent sur un jar GLOBAL au navigateur indexé par domaine/path : aucune

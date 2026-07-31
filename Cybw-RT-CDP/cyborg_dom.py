@@ -165,11 +165,6 @@ def _parse_locator_file(raw: bytes) -> Optional[CssSelector]:
 
 # ── tar (de)serialisation ─────────────────────────────────────────────────────
 
-def download_req_tar(body: str | bytes) -> tarfile.TarFile:
-    body_bytes = body if isinstance(body, bytes) else body.encode('utf8')
-    return tarfile.open(fileobj=io.BytesIO(body_bytes), mode="r:*")
-
-
 def _normalize_tar_path(p: str) -> str:
     """`./foo/bar` ou `foo/bar` → `foo/bar`. Racine → ``."""
     if p.startswith("./"):
@@ -177,33 +172,42 @@ def _normalize_tar_path(p: str) -> str:
     return p.strip("/")
 
 
-def load_selector(req_tar: tarfile.TarFile, name: str) -> Optional[CssSelector]:
-    """Charge le sélecteur `<name>.json` (à la racine du tar). Utilisé par /js
-    pour la frame d'évaluation (`frame.json`)."""
-    target = _normalize_tar_path(name) + ".json"
-    for ent in req_tar.getmembers():
-        if _normalize_tar_path(ent.name) != target:
-            continue
-        buf = req_tar.extractfile(ent)
-        if buf is not None:
-            with buf as f:
-                    return _parse_locator_file(f.read())
-    return None
+def read_req_tar(body: str | bytes) -> dict[str, bytes]:
+    """Corps HTTP (tar) → `{chemin normalisé: contenu}`, inverse de `build_tar`.
+
+    Tout est lu en mémoire ICI, uploads `/input` compris : aucun `TarFile` ne
+    fuit hors de cette fonction, donc plus personne en aval n'a à se soucier du
+    fait que l'archive est ouverte, seekable ou déjà consommée."""
+    out: dict[str, bytes] = {}
+    body_bytes = body.encode() if isinstance(body,str) else body
+    with tarfile.open(fileobj=io.BytesIO(body_bytes), mode="r:*") as tf:
+        for ent in tf.getmembers():
+            if not ent.isfile():
+                # blc du reste!!
+                continue
+            with tf.extractfile(ent) as f:  # type: ignore[union-attr]
+                out[_normalize_tar_path(ent.name)] = f.read()
+    return out
 
 
-def load_selectors(req_tar: tarfile.TarFile,
-                   dir: str = "/") -> dict[str, CssSelector]:
+def load_selector(members: dict[str, bytes], name: str) -> Optional[CssSelector]:
+    """Charge le sélecteur `<name>.json` (à la racine du tar). Utilisé par /tap
+    et /input (`0.json`, l'unique sélecteur) et par /js pour la frame
+    d'évaluation (`frame.json`)."""
+    raw = members.get(_normalize_tar_path(name) + ".json")
+    return _parse_locator_file(raw) if raw is not None else None
+
+
+def load_selectors(members: dict[str, bytes],
+                   dir: str = "") -> dict[str, CssSelector]:
     """Chaque `<name>.json` directement sous `dir` → {name (sans .json):
     CssSelector}. Le CLI nomme les fichiers par index (0, 1, …), donc les clés
-    sont uniques et ordonnables. Remplace load_targ/load_targs."""
+    sont uniques et ordonnables. `dir` vide = racine du tar : les uploads sous
+    `files/` de /input sont donc ignorés d'office."""
     prefix = _normalize_tar_path(dir)
     prefix = prefix + "/" if prefix else ""
     out: dict[str, CssSelector] = {}
-    for ent in req_tar.getmembers():
-        if not ent.isfile():
-            continue
-
-        name = _normalize_tar_path(ent.name)
+    for name, raw in members.items():
         if prefix and not name.startswith(prefix):
             continue
 
@@ -211,27 +215,9 @@ def load_selectors(req_tar: tarfile.TarFile,
         if "/" in rel or not rel.endswith(".json"):
             continue
 
-        buf = req_tar.extractfile(ent)
-        if buf is None:
-            continue
-
-        with buf as f:
-            sel = _parse_locator_file(f.read())
+        sel = _parse_locator_file(raw)
         if sel is not None:
             out[rel[:-len(".json")]] = sel
-    return out
-
-
-def read_tar_dir(req_tar: tarfile.TarFile) -> dict[str, bytes]:
-    """Inverse de `build_tar` : chaque fichier régulier du tar →
-    `{chemin_normalisé: bytes}`. Le suffixe `_dir` rappelle qu'on ne garde que
-    les `.isfile()` (dirs/symlinks/… ignorés, voulu)."""
-    out: dict[str, bytes] = {}
-    for ent in req_tar.getmembers():
-        buf = req_tar.extractfile(ent)
-        if buf is not None:
-            with buf as f:
-                out[_normalize_tar_path(ent.name)] = f.read()
     return out
 
 
@@ -253,10 +239,18 @@ def tar_filter_dir(root: dict[str,bytes], prefix: str) -> dict[str,bytes]:
     return dst
 
 
-def tar_member_text(root: dict[str, bytes], key: str) -> Optional[str]:
+def tar_member_text(root: dict[str, bytes], key: str,
+                    strip: bool = False) -> Optional[str]:
+    """Membre `key` en texte, `None` si absent (≠ présent-mais-vide).
+
+    `strip=True` pour les scalaires « une ligne » (url, max, timeout, …) que le
+    client écrit avec `echo`, donc avec un `\\n` final parasite. Les valeurs
+    utilisateur (`text`, `select-value`, écrites en `echo -n`) sont rendues
+    telles quelles : un texte multi-ligne est légitime."""
     if key not in root:
         return None
-    return root[key].decode("utf-8")
+    out = root[key].decode("utf-8")
+    return out.strip() if strip else out
 
 # ── Frames + shadow walk (CDP-only) ───────────────────────────────────────────
 

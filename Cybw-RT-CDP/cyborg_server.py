@@ -1,37 +1,55 @@
 #!/usr/bin/env -S uv run
 """Cyborg `/cyborg` data-plane server (Host-Android side).
 
-Long-running HTTP server that sits next to Chrome and executes query/tap/fill
+Long-running HTTP server that sits next to Chrome and executes query/tap/input
 server-side, collapsing many CDP round-trips into one `/cyborg` action RTT. It
 attaches to an already-running Chrome over CDP (`127.0.0.1:9222`) via nodriver
-and speaks the contract défini par `Cyborg-User-SDK/cyborg.fish`:
+and speaks le contrat de `Cybw-Cli/lib/transport.fish`.
 
-    POST /visit  (tar in)                 -> navigate ; url depuis fichier `url`
-    POST /query  (tar in/out)             -> per hit: text + html (dossier `<i>/`) ;
+TRANSPORT — tar in, tar out. Toute reponse (succes, erreur metier, crash) est un
+tar `application/x-tar` contenant `ok.txt` XOR `error.txt` :
+
+    succes -> `ok.txt` (vide, sauf /js) + le payload de l'endpoint
+    echec  -> `error.txt` (le message) + les artefacts eventuels (trace de /tap)
+
+Le client ne lit PAS le code HTTP : il untar et tranche sur le marqueur. C'est
+`_resp_ok` / `_resp_error` qui garantissent l'invariant, tout `return` passe par
+l'une des deux ; les exceptions sont rattrapees par `_on_exception` (traceback
+dans `error.txt`), une vue pouvant declarer un rendu local via `on_error` pour y
+joindre ses artefacts sans try/except (cf. /tap).
+
+    POST /visit           -> ok.txt ; url depuis fichier `url`
+    POST /query           -> ok.txt + par hit `<i>/NNNN/{text,html}` ;
          max depuis fichier `max` (int, 0/absent -> cap 1000)
-    POST /tap    (tar in, flat)           -> click first match (single selecteur)
-    POST /fill   (tar in, flat)           -> focus first match + type text ;
-         text depuis fichier `text` ; OU, si le sous-dossier `files/` est
-         présent, injecte chaque `files/<basename>` dans le match (input
-         type=file) en mémoire renderer : File + DataTransfer + input.files
-         (nom préservé = nom vu par la page, mimetype deviné de l'extension)
-         — pas de focus/scroll (input souvent caché)
-    POST /select (tar in, flat)           -> select <option> by innerText ;
-         text depuis fichier `text`
-    POST /js              (tar in/out)    -> callFunctionOn(script.js, args.json)
-    POST /snap            (tar out)       -> page.html + <frame_id>.html + screenshot.png + network_page.har
-    POST /cookie (tar in/out)             -> cookie.txt (header Cookie) +
-         user-agent.txt ; url depuis fichier `url`
-    POST /net    (tar in/out)             -> entry.har : entree HAR {request, response}
+    POST /tap             -> ok.txt + `tries/NNNN.json` (une tentative par
+         fichier) ; en echec : error.txt + la meme trace
+    POST /input           -> ok.txt ; focus + insert_text depuis `text`, OU
+         `select-value` (select <option> par value), OU le sous-dossier `files/` :
+         injecte chaque `files/<basename>` dans le match (input type=file) en
+         memoire renderer via File + DataTransfer + input.files (nom preserve =
+         nom vu par la page, mimetype devine de l'extension) — pas de
+         focus/scroll (input souvent cache)
+    POST /js              -> ok.txt = l'output DEJA en texte brut (comme `jq -r`,
+         vide si le client n'a pas demande `output` == "json") ;
+         callFunctionOn(script.js, args.json), frame.json optionnel
+    POST /snap            -> ok.txt + `frame_<page|tid>/{target.json,document.html}`
+         + screenshot_full.png + network_page.har
+    POST /net             -> ok.txt + entry.har : entree HAR {request, response}
          (`response` null au stade `request`, rempli au stade `response`) ;
-         url + timeout depuis fichiers `url` / `timeout`
-    GET  /status                          -> {"page": bool, "last_action": rfc3339}
+         deadline ecoulee = ok.txt SANS entry.har ; url + timeout + stade depuis
+         les fichiers de meme nom
+    POST /profile-save    -> ok.txt + cookies.json
+    POST /profile-restore -> ok.txt ; cookies.json en entree (WIPE, pas un merge)
+    GET  /status          -> {"page": bool, "last_action": rfc3339} en JSON (seul
+         endpoint hors contrat tar : health/lease, 200 ou 503)
 
 Tous les endpoints data sont en POST : les parametres scalaires (url, max, text,
-timeout) sont lus depuis des FICHIERS du tar de requete (via `read_tar_dir`), en
-strippant le `\n` final ajoute par le client (`echo`). Les selecteurs sont des
-fichiers `<index>.json` du tar (`load_selectors`) ; les actions mono-selecteur
-(tap/fill/select) prennent l'unique selecteur. `/status` reste en GET (health/lease).
+timeout) sont lus depuis des FICHIERS du tar de requete, mis en memoire des la
+reception (`read_req_tar` -> `dict[str, bytes]`, aucun TarFile ne circule).
+`tar_member_text(..., strip=True)` pour les scalaires « une ligne » que le client
+ecrit avec `echo` ; brut pour les valeurs utilisateur (`text`, `select-value`).
+Les selecteurs sont des fichiers `<index>.json` du tar (`load_selectors`) ; les
+actions mono-selecteur (tap/input) prennent `0.json` (`load_selector`).
 
 Vocabulaire :
   * **Selecteur** : un `.json` produit par le CLI (argparse -> jq). Compile en
@@ -46,16 +64,6 @@ Vocabulaire :
     regex. Si present, la recherche est restreinte aux iframes matchant ; sinon
     au top frame UNIQUEMENT. `mode` = attached | visible | hidden (par selecteur).
     `nth` = index 0-based facon Playwright (aucun garde de taille).
-
-  * Une recherche = UN selecteur (plus de fallback multi-locator). Cote requete :
-      - /query : plusieurs `<index>.json` a la racine, nommes par index client.
-      - /tap, /fill, /select : un seul `.json` a la racine.
-
-  * **Target**  : l'identifiant opaque Chrome d'une page ou d'une iframe
-    (`targetId`). Listing des frames trivial : top tab + chaque
-    `Target.getTargets()` de type 'iframe' (OOPIFs cross-origin). Walking du
-    DOM uniquement pour découvrir les shadow roots à l'intérieur de chaque
-    frame (querySelectorAll ne traverse ni shadow ni iframe boundaries).
 
 Pierce + attach : `DOM.getDocument(pierce=true)` traverse les shadows fermés en
 une passe. Pour les OOPIFs cross-origin (invisibles depuis le target parent —
@@ -72,15 +80,17 @@ Design constraints (see project memory `cyborg-redesign`):
     LECTURE d'innerText d'un hit utilise Runtime.callFunctionOn (resolve_node
     + `function() { return this.innerText }`), seul moyen d'obtenir la
     sémantique innerText (display:none ignoré, normalisation whitespace) ;
-    et /select pilote le <select> via callFunctionOn (popup natif hors page,
+    et /input pilote le <select> via callFunctionOn (popup natif hors page,
     impilotable en CDP pur) — events input/change synthétiques, assumé.
-  * Pas de fallback silencieux : les erreurs CDP remontent.
+  * Pas de fallback silencieux : les erreurs CDP remontent — jusqu'a
+    `_on_exception`, qui les rend en `error.txt` avec leur traceback.
 
-`/snap` : produit `page.html` (top frame) + un fichier `<frame_id>.html` par
-sub-frame (OOPIF). Aucune transformation du HTML : les iframes gardent leur
-`src` original, le caller reconstruit lui-même la correspondance frame_id ↔
-iframe element. Shadow roots inlinés via `<template shadowrootmode>`
-(Declarative Shadow DOM, HTML5 standard).
+`/snap` : produit `frame_page/document.html` (top frame) + un dossier
+`frame_<target_id>/` par sub-frame (OOPIF), chacun avec son `target.json`.
+Aucune transformation du HTML : les iframes gardent leur `src` original, le
+caller reconstruit lui-même la correspondance frame_id ↔ iframe element. Shadow
+roots inlinés via `<template shadowrootmode>` (Declarative Shadow DOM, HTML5
+standard).
 
 Async natif via Quart : un seul event loop, pas de bridge sync/async, pas de
 lock global. Les requêtes restent sérialisées de fait par le client (un seul
@@ -89,8 +99,8 @@ opérateur).
 `/status` unifies health and lease introspection. Its body carries `last_action`,
 which Farm-Cell pulls over the cloudflared tunnel to learn the effective
 `expires_at` (= last_action + 120s); its HTTP code (200 page present / 503 not)
-serves health monitoring. Every recognised data action (visit/query/tap/fill/select/snap)
-refreshes `last_action`; `/status` itself does not.
+serves health monitoring. Every recognised data action (visit/query/tap/input/js/
+snap/net/profile-*) refreshes `last_action`; `/status` itself does not.
 """
 
 import _fix_nodriver   # noqa: F401 — MUST precede `import nodriver`. # type: ignore
@@ -103,18 +113,20 @@ import os
 import posixpath
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlsplit
 
 import nodriver
 import quart
 from nodriver import cdp
+from werkzeug.exceptions import HTTPException
 
 import cyborg_dom
 import cyborg_har
 import cyborg_profile
 from cyborg_dom import (
-    download_req_tar, load_selector, load_selectors, read_tar_dir, build_tar,
+    read_req_tar, load_selector, load_selectors, build_tar,
     list_frame_ids, get_frame_by_id, collect_frames, find_frame,
     _search_selector, _send, _tab, tar_filter_dir, tar_member_text,
 )
@@ -180,38 +192,102 @@ def _doc_to_html(doc_node) -> bytes:
 # ── HTTP server ───────────────────────────────────────────────────────────────
 
 app = quart.Quart(__name__)
-# Les tars de /fill embarquent des fichiers d'upload : le défaut quart (16 Mio)
-# les refuserait en 413 silencieux. 256 Mio = MAX_SIZE websocket de nodriver.
+# le défaut quart était 16 Mio. Il a été changé à 256 Mio car c'est le MAX_SIZE websocket de nodriver.
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024
+
+
+# ── Transport : toute réponse est un tar `ok.txt` XOR `error.txt` ──────────────
+
+def _resp_ok(files: dict[str, bytes] | None = None,
+             ok: bytes = b"") -> quart.Response:
+    """Succès : `ok.txt` (vide, sauf /js qui y met son output) + payload."""
+    return quart.Response(build_tar({**(files or {}), "ok.txt": ok}),
+                          mimetype="application/x-tar")
+
+
+def _resp_error(msg: str, files: dict[str, bytes] | None = None,
+                status: int = 200) -> quart.Response:
+    """Échec : `error.txt` + artefacts éventuels (ex. la trace de /tap).
+
+    200 par défaut : une erreur métier EST une réponse d'op valide, le client
+    tranche sur la présence de `error.txt` et ne lit pas le code HTTP."""
+    return quart.Response(build_tar({**(files or {}), "error.txt": msg.encode("utf-8")}),
+                          status=status, mimetype="application/x-tar")
+
+
+def on_error(render):
+    """Déclare le rendu d'erreur DE CETTE REQUÊTE : `render(exc) -> Response`.
+
+    Sert aux vues dont l'échec remonte du fond d'un appel (/tap) et doit
+    emporter des artefacts qui sont des LOCALES de la vue : `render` est une
+    fonction interne, donc elle ferme dessus, et l'exception continue de
+    remonter naturellement à quart — pas de try/except dans la vue.
+
+    `quart.g` n'est pas un global : `RequestContext._push_appctx` pousse un app
+    context par requête et `g` est un LocalProxy sur le contextvar `_cv_app`,
+    donc chaque requête (chaque tâche) a le sien."""
+    quart.g.on_error = render
+    return render
+
+
+# Échecs attendus : message court. Le reste = bug, on veut la traceback.
+_EXPECTED = (_NoMatch, _TapTimeout)
+
+
+def _describe(exc: BaseException) -> str:
+    if isinstance(exc, _EXPECTED):
+        return f"{type(exc).__name__}: {exc}"
+    return "".join(traceback.format_exception(exc))
+
+
+@app.errorhandler(Exception)
+async def _on_exception(exc: Exception) -> quart.Response:
+    """Toute exception → tar `error.txt`. Si la vue a déclaré un rendu local
+    (`on_error`), c'est lui qui produit la réponse : il connaît ses artefacts."""
+    render = getattr(quart.g, "on_error", None)
+    if render is not None:
+        return render(exc)
+    return _resp_error(_describe(exc),
+                       status=200 if isinstance(exc, _EXPECTED) else 500)
+
+
+@app.errorhandler(HTTPException)
+async def _on_http_exception(exc: HTTPException) -> quart.Response:
+    """404 route inconnue, 413 upload trop gros, 405… : quart les détourne avant
+    la recherche par `__mro__`, donc `_on_exception` ne les voit jamais."""
+    return _resp_error(f"{exc.code} {exc.name}: {exc.description}",
+                       status=exc.code or 500)
 
 
 @app.post("/visit")
 async def visit():
     _touch()
 
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        members = read_tar_dir(req_tar)
-    visit_url = members.get("url", b"").decode("utf-8").rstrip("\n")
+    members = read_req_tar(await quart.request.get_data())
+    visit_url = tar_member_text(members, "url", strip=True)
+    if not visit_url:
+        return _resp_error("no url provided")
 
     tab = await _tab()
 
     await tab.send(cdp.page.navigate(visit_url))
 
-    return quart.Response(build_tar({}), mimetype="application/x-tar")
+    return _resp_ok()
 
 
 @app.post("/query")
 async def query():
     _touch()
 
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        selectors = load_selectors(req_tar)
-        members = read_tar_dir(req_tar)
-    max_raw = members.get("max", b"0").decode("utf-8").rstrip("\n")
-    given_budget = int(max_raw) if max_raw else 0
+    members = read_req_tar(await quart.request.get_data())
+    selectors = load_selectors(members)
+    max_raw = tar_member_text(members, "max", strip=True) or "0"
 
     if not selectors:
-        return "bad selectors", 400
+        return _resp_error("bad selectors")
+    if not max_raw.isdigit():
+        return _resp_error(f"bad max: {max_raw!r}")
+    given_budget = int(max_raw)
     budget = given_budget if given_budget > 0 else 1_000
 
     tab = await _tab()
@@ -232,59 +308,54 @@ async def query():
         if budget <= 0:
             break
 
-    return quart.Response(build_tar(files), mimetype="application/x-tar")
+    return _resp_ok(files)
 
 
 @app.post("/tap")
 async def tap():
     _touch()
 
-    # Tar plat mono-sélecteur : on prend le premier (seul), comme /fill /select.
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        sel = next(iter(load_selectors(req_tar).values()), None)
-
-    # /tap renvoie TOUJOURS un tar : `tries/NNNN.json` (une tentative par fichier)
-    # + `error.txt` si echec. Le client (cgi/tap.fish) decide succes/echec par la
-    # presence de error.txt ; c'est donc lui qui gere l'erreur, pas le transport.
-    if not sel:
-        return quart.Response(build_tar({"error.txt": b"bad selector"}),
-                              mimetype="application/x-tar")
+    # Tar plat mono-sélecteur : le CLI écrit toujours `0.json`.
+    members = read_req_tar(await quart.request.get_data())
+    sel = load_selector(members, "0")
+    if sel is None:
+        return _resp_error("bad selector")
 
     # Page top.
     tab = await _tab()
 
     # Click fiable (toutes techniques Playwright A-F activees en dur). `tries` est
-    # rempli par reliable_tap tentative par tentative, y compris en cas d'echec.
+    # rempli par reliable_tap tentative par tentative, y compris en cas d'echec :
+    # la trace part donc avec l'erreur, via le rendu local ci-dessous.
     tries: list = []
-    error = None
-    try:
-        await reliable_tap(tab, sel, tries=tries)
-    except _NoMatch as e:
-        error = f"no match: {e}"
-    except _TapTimeout as e:
-        error = f"tap not actionable: {e}"
 
-    files = {f"tries/{i + 1:04d}.json": json.dumps(t).encode("utf-8")
-             for i, t in enumerate(tries)}
-    if error is not None:
-        files["error.txt"] = error.encode("utf-8")
+    def _tries_files() -> dict[str, bytes]:
+        return {f"tries/{i + 1:04d}.json": json.dumps(t).encode("utf-8")
+                for i, t in enumerate(tries)}
 
-    return quart.Response(build_tar(files), mimetype="application/x-tar")
+    @on_error
+    def _(exc):                                  # ferme sur `tries`
+        return _resp_error(_describe(exc), _tries_files())
+
+    # Peut lever (_NoMatch, _TapTimeout, ou une erreur CDP brute) : voulu, c'est
+    # `_on_exception` qui rend la réponse en appelant le rendu ci-dessus.
+    await reliable_tap(tab, sel, tries=tries)
+
+    return _resp_ok(_tries_files())
 
 
 @app.post("/input")
 async def input():
     _touch()
 
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        sel = next(iter(load_selectors(req_tar).values()), None)
-        members = read_tar_dir(req_tar)
-    text = tar_member_text(members,"text")
+    members = read_req_tar(await quart.request.get_data())
+    sel = load_selector(members, "0")
+    text = tar_member_text(members, "text")
     select_value = tar_member_text(members, "select-value")
     files = tar_filter_dir(members, "files/")
 
-    if not sel:
-        return "bad selector", 400
+    if sel is None:
+        return _resp_error("bad selector")
 
     tab = await _tab()
 
@@ -293,7 +364,7 @@ async def input():
     hits = await _search_selector(tab, sel, 1,
                               mode="attached" if files else "visible")
     if not hits:
-        return "no match", 404
+        return _resp_error("no match")
     h = hits[0]
 
     if files:
@@ -329,12 +400,13 @@ async def input():
         ), h.frame_sid)
         if exc is not None:
             desc = exc.exception.description if exc.exception else exc.text
-            return f"set files failed: {desc}", 400
-        return quart.Response(build_tar({}), mimetype="application/x-tar")
+            return _resp_error(f"set files failed: {desc}")
+        return _resp_ok()
 
-    if text:
+    if text is not None:
         # Focus et insère le texte.
         # NOTE: insert_text() émule ni le clavier ni le presse-papier, mais produit `isTrusted:true`
+        # C'est sûrement detect par stripe et tt
 
         await _send(tab, cdp.dom.scroll_into_view_if_needed(
             backend_node_id=h.backend_node_id), h.frame_sid)
@@ -343,9 +415,9 @@ async def input():
 
         await _send(tab, cdp.input_.insert_text(text), h.frame_sid)
 
-        return quart.Response(build_tar({}), mimetype="application/x-tar")
+        return _resp_ok()
 
-    if select_value:
+    if select_value is not None:
         # Focus et émet des events synthétique.
         # TODO: `isTrusted:false`
 
@@ -376,32 +448,39 @@ async def input():
             return_by_value=True,
         ), h.frame_sid)
         if exc is not None:
-            raise RuntimeError(f"select callFunctionOn failed: {exc}")
+            desc = exc.exception.description if exc.exception else exc.text
+            return _resp_error(f"select failed: {desc}")
 
         if not result.value:
-            return "option not found", 404
+            return _resp_error("option not found")
         else:
-            return quart.Response(build_tar({}), mimetype="application/x-tar")
+            return _resp_ok()
 
-    return "no input provided", 400
+    return _resp_error("no input provided")
 
 
 @app.post("/js")
 async def js():
     _touch()
 
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        members = read_tar_dir(req_tar)
-        # `frame.json` (optionnel) : sélecteur d'iframe (`--frame`) qui choisit la
-        # FRAME où évaluer. On résout la frame par son URL, puis on éval dedans.
-        frame_sel = load_selector(req_tar, "frame")
+    members = read_req_tar(await quart.request.get_data())
+    # `frame.json` (optionnel) : sélecteur d'iframe (`--frame`) qui choisit la
+    # FRAME où évaluer. On résout la frame par son URL, puis on éval dedans.
+    frame_sel = load_selector(members, "frame")
 
-    arguments = [
-        cdp.runtime.CallArgument(value=v)
-        for v in json.loads(members["args.json"].decode("utf-8"))
-    ]
-    # `/output` == "json" => returnByValue + on renvoie la valeur ; vide sinon.
-    want_value = members["output"].strip() == b"json"
+    script = tar_member_text(members, "script.js")
+    args_raw = tar_member_text(members, "args.json")
+    if script is None or args_raw is None:
+        return _resp_error("missing member: script.js and/or args.json")
+    try:
+        args = json.loads(args_raw)
+    except json.JSONDecodeError as e:
+        return _resp_error(f"bad args.json: {e}")
+    if not isinstance(args, list):
+        return _resp_error("bad args.json: expected a JSON array")
+
+    arguments = [cdp.runtime.CallArgument(value=v) for v in args]
+    want_value = True
 
     tab = await _tab()
 
@@ -413,8 +492,7 @@ async def js():
     if frame_sel is not None:
         frame = await find_frame(tab, frame_sel)
         if frame is None:
-            return quart.Response(build_tar({"error": b"frame: no match"}),
-                                  mimetype="application/x-tar")
+            return _resp_error("frame: no match")
         frame_sid = frame.frame_sid
         # globalThis de la frame = document.defaultView. resolve_node par
         # backendNodeId marche pour OOPIF (session dédiée) comme pour in-process.
@@ -433,23 +511,27 @@ async def js():
             raise RuntimeError(f"/js globalThis eval failed: {exc}")
 
     result, exc = await _send(tab, cdp.runtime.call_function_on(
-        function_declaration=members["script.js"].decode("utf-8"),
+        function_declaration=script,
         object_id=glob.object_id,
         arguments=arguments,
-        return_by_value=want_value,
+        return_by_value=True,
         await_promise=True,
     ), frame_sid)
     if exc is not None:
         desc = exc.exception.description if exc.exception else exc.text
-        files = {"error": desc.encode("utf-8")}
-        return quart.Response(build_tar(files), mimetype="application/x-tar")
+        return _resp_error(desc)
 
-    files = {"output": json.dumps(result.value).encode("utf-8")} if want_value else {}
-    return quart.Response(build_tar(files), mimetype="application/x-tar")
+    # `ok.txt` = l'output DÉJÀ en texte brut, comme un `jq -r` : une string sort
+    # nue, le reste en JSON. Sans `-j`, returnByValue est off donc `value` est
+    # None — on renvoie du vide, pas `null`.
+    text = result.value if isinstance(result.value, str) else json.dumps(result.value)
+    return _resp_ok(ok=text.encode("utf-8"))
 
 
 @app.post("/snap")
 async def snap():
+    _touch()
+
     tab = await _tab()
     files: dict = {}
 
@@ -507,8 +589,7 @@ async def snap():
     # Delta réseau depuis le dernier snap (top-frame).
     files["network_page.har"] = cyborg_har.drain_page_har()
 
-    _touch()
-    return quart.Response(build_tar(files), mimetype="application/x-tar")
+    return _resp_ok(files)
 
 
 @app.post("/net")
@@ -517,8 +598,9 @@ async def net():
     l'url matche le glob `url` (wildcards `*`/`?`), jusqu'a `timeout` secondes.
     Relache la requete, desactive Fetch, et renvoie `entry.har` = une entree HAR
     {request, response} ou `request` est reconstruit a la main. Si rien ne matche
-    avant T : tar vide (pas de entry.har). `url`/`timeout`/`stade` toujours fournis
-    par le client (fichiers du tar de requete `url` / `timeout` / `stade`).
+    avant T : `ok.txt` SANS `entry.har` (deadline ecoulee = pas une erreur).
+    `url`/`timeout`/`stade` toujours fournis par le client (fichiers du tar de
+    requete `url` / `timeout` / `stade`).
 
     `stade` (`request` | `response`, defaut `response`) choisit a quel stade Fetch
     relache :
@@ -535,11 +617,16 @@ async def net():
     User-Agent dans `headers`, plus le tableau `cookies`)."""
     _touch()
 
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        members = read_tar_dir(req_tar)
-    url_glob = members.get("url", b"").decode("utf-8").rstrip("\n")
-    timeout = float(members.get("timeout", b"60").decode("utf-8").rstrip("\n"))
-    stade = members.get("stade", b"response").decode("utf-8").rstrip("\n") or "response"
+    members = read_req_tar(await quart.request.get_data())
+    url_glob = tar_member_text(members, "url", strip=True)
+    timeout_raw = tar_member_text(members, "timeout", strip=True) or "60"
+    stade = tar_member_text(members, "stade", strip=True) or "response"
+    if not url_glob:
+        return _resp_error("no url provided")
+    try:
+        timeout = float(timeout_raw)
+    except ValueError:
+        return _resp_error(f"bad timeout: {timeout_raw!r}")
     want_response = stade != "request"
     request_stage = (cdp.fetch.RequestStage.RESPONSE if want_response
                      else cdp.fetch.RequestStage.REQUEST)
@@ -613,7 +700,8 @@ async def net():
         tab.remove_handler(cdp.fetch.RequestPaused, _on_paused)
 
     if captured is None:
-        return quart.Response(build_tar({}), mimetype="application/x-tar")
+        # Deadline ecoulee : succes SANS `entry.har`, pas une erreur.
+        return _resp_ok()
 
     request, har_response = captured
 
@@ -651,8 +739,7 @@ async def net():
     # au format HAR au stade RESPONSE).
     har_entry = {"request": har_request, "response": har_response}
 
-    files = {"entry.har": json.dumps(har_entry).encode("utf-8")}
-    return quart.Response(build_tar(files), mimetype="application/x-tar")
+    return _resp_ok({"entry.har": json.dumps(har_entry).encode("utf-8")})
 
 
 # ── Profil : cookies ──────────────────────────────────────────────────────────
@@ -671,8 +758,7 @@ async def profile_save():
     tab = await _tab()
     profile = await cyborg_profile.export_profile(tab)
 
-    return quart.Response(build_tar(cyborg_profile.to_tar_files(profile)),
-                          mimetype="application/x-tar")
+    return _resp_ok(cyborg_profile.to_tar_files(profile))
 
 
 @app.post("/profile-restore")
@@ -681,14 +767,13 @@ async def profile_restore():
     un merge)."""
     _touch()
 
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        members = read_tar_dir(req_tar)
+    members = read_req_tar(await quart.request.get_data())
     profile = cyborg_profile.from_tar_members(members)
 
     tab = await _tab()
     await cyborg_profile.restore_profile(tab, profile)
 
-    return quart.Response(build_tar({}), mimetype="application/x-tar")
+    return _resp_ok()
 
 
 @app.get("/status")

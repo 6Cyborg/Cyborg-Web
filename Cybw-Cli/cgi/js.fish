@@ -7,7 +7,7 @@ set -lx log_registry CybJs
 source ./lib/transport.fish
 source ./lib/serialize_selector.fish
 
-argparse -N1 'j/json' 'f/frame=' -- $argv; or exit (llerr -e2 "bad usage")
+argparse -N1 'f/frame=' -- $argv; or exit (llerr -e2 "bad usage")
 
 __cyb_op_init; or exit 1
 
@@ -22,17 +22,13 @@ if set -q _flag_frame
     or exit (llerr -e2 "bad frame selector")
 end
 
-# le daemon ne returnByValue que si `output` == "json"
-set -q _flag_json; and echo json >$_CYBW_REQ/output; or echo -n >$_CYBW_REQ/output
+if not _cyb_op js
+    exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYBW_ERR)) — trace: $(llcode $CYBW_CALL)")
+end
 
-_cyb_op js >$_CYBW_ERR
-or exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYBW_ERR))")
-
-# le daemon renvoie un membre `error` (et pas `output`) si le JS a throw
-test -s $_CYBW_RESP/error; and exit (llerr -e1 "js threw : $(llcode (cat $_CYBW_RESP/error))")
-
-# `output` est encodé JSON (json.dumps) ; jq -r le décode
-set -q _flag_json; and jq -r . <$_CYBW_RESP/output
+# `ok.txt` porte déjà l'output en texte brut (le daemon a fait le `jq -r`) : vide
+# sans -j, sinon la valeur nue pour une string, en JSON pour le reste.
+cat $_CYBW_RESP/ok.txt
 
 set -q CYBW_TRACE; and llinf "evaluated js"
 exit 0

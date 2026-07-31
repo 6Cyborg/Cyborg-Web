@@ -20,8 +20,7 @@ while true
 
     set -l qq_dir (cybw query -o root $argv); or exit $status
 
-    # succès quand chaque index 0..want-1 a un sous-dossier (≥1 hit).
-    set -l got $qq_dir/*
+    set -l got (path filter -d -- $qq_dir/*)
     if test (count $got) -eq $want
         set -q CYBW_TRACE; and llinf "found all : $(llcode $argv)"
         exit 0

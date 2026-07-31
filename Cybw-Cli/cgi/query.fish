@@ -21,8 +21,9 @@ for contents in (serialize_selector $argv)
     set idx (math $idx + 1)
 end
 
-_cyb_op query >$_CYBW_ERR
-or exit (llerr -e1 "error: $(llcode (cat $_CYBW_ERR))")
+if not _cyb_op query
+    exit (llerr -e1 "op failed: $argv $(llcode (cat $_CYBW_ERR)) — trace: $(llcode $CYBW_CALL)")
+end
 
 switch $_flag_output
     case items
