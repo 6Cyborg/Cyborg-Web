@@ -3,16 +3,17 @@
 # * Supporte les fichiers.
 # * Humanisation sans configuration
 #
-#   cybw input --text "vendeur de glaces" -e '<css>'
-#   cybw input --file a --file b -e '<css>'
+#   cybw input --text "vendeur de glaces" 'input<css>'
+#   cybw input --file a --file b 'input[type="file"]<css>'
+#   cybw input --opt-value "1" 'select<css>'
 
 set -lx log_registry CybSet
 
 source ./lib/transport.fish
 source ./lib/serialize_selector.fish
 
-argparse -x t,f 't/text=' 'f/file=+' -- $argv
-and test -n "$_flag_text" -o -n "$_flag_file"
+argparse -x t,f,select-value 't/text=' 'f/file=+' 'select-value='  -- $argv
+and test -n "$_flag_text$_flag_file$_flag_select_value"
 or exit (llerr -e2 "bad usage")
 
 set -l selector (serialize_selector $argv)
@@ -39,10 +40,12 @@ if set -q _flag_file
         end
     end
 else if set -q _flag_text
-    echo $_flag_text >$_CYBW_REQ/text
+    echo -n -- $_flag_text >$_CYBW_REQ/text
+else if set -q _flag_select_value
+    echo -n -- $_flag_select_value >$_CYBW_REQ/select-value
 end
 
-_cyb_op fill >$_CYBW_ERR
+_cyb_op input >$_CYBW_ERR
 or exit (llerr -e1 "error: $(llcode (cat $_CYBW_ERR))")
 
 set -q CYBW_TRACE; and llinf "input $(llcode $_flag_text $_flag_file)"

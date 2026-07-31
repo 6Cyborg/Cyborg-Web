@@ -116,7 +116,7 @@ import cyborg_profile
 from cyborg_dom import (
     download_req_tar, load_selector, load_selectors, read_tar_dir, build_tar,
     list_frame_ids, get_frame_by_id, collect_frames, find_frame,
-    _search_selector, _send, _tab,
+    _search_selector, _send, _tab, tar_filter_dir, tar_member_text,
 )
 from cyborg_tap import reliable_tap, _TapTimeout, _NoMatch
 
@@ -271,16 +271,16 @@ async def tap():
     return quart.Response(build_tar(files), mimetype="application/x-tar")
 
 
-@app.post("/fill")
-async def fill():
+@app.post("/input")
+async def input():
     _touch()
 
     with download_req_tar(await quart.request.get_data()) as req_tar:
         sel = next(iter(load_selectors(req_tar).values()), None)
         members = read_tar_dir(req_tar)
-    text = members.get("text", b"").decode("utf-8").rstrip("\n")
-    uploads = {posixpath.basename(n): data for n, data in members.items()
-               if n.startswith("files/")}
+    text = tar_member_text(members,"text")
+    select_value = tar_member_text(members, "select-value")
+    files = tar_filter_dir(members, "files/")
 
     if not sel:
         return "bad selector", 400
@@ -290,24 +290,21 @@ async def fill():
     # Éxécute la recherche (les uploads sous `files/` ne sont pas des .json à la
     # racine => load_selectors les ignore, pas besoin de les retirer).
     hits = await _search_selector(tab, sel, 1,
-                              mode="attached" if uploads else "visible")
+                              mode="attached" if files else "visible")
     if not hits:
         return "no match", 404
     h = hits[0]
 
-    if uploads:
-        # Chrome peut tourner sur une autre machine que ce serveur (Android via
-        # adb forward) : un chemin local + DOM.setFileInputFiles n'y référence
-        # rien — la commande ne valide pas l'existence et la page voit un File
-        # vide. On injecte donc le contenu en mémoire renderer (technique
-        # Playwright) : File + DataTransfer + input.files, events synthétiques
-        # (isTrusted:false, assumé comme /select). Ni scroll ni focus — les
-        # <input type=file> sont souvent display:none derrière un bouton stylé.
+    if files:
+        # <input type="file">
+        # D'abord injecte le fichier en mémoire navigateur comme Playwright (pour les navigateurs distants).
+        # Puis émet des events synthétique mais qui sont `isTrusted:false`. Donc pas besoin de scroll ni focus
+        # TODO: isTrusted:false
         payload = [{
             "name": name,
             "type": mimetypes.guess_type(name)[0] or "application/octet-stream",
             "b64": base64.b64encode(data).decode("ascii"),
-        } for name, data in sorted(uploads.items())]
+        } for name, data in sorted(files.items())]
         remote = await _send(tab, cdp.dom.resolve_node(
             backend_node_id=h.backend_node_id), h.frame_sid)
         _, exc = await _send(tab, cdp.runtime.call_function_on(
@@ -330,76 +327,62 @@ async def fill():
             return_by_value=True,
         ), h.frame_sid)
         if exc is not None:
-            # Locator posé ailleurs que sur l'<input type=file> (ex. le bouton
-            # stylé par-dessus), ou page qui a remplacé le node.
             desc = exc.exception.description if exc.exception else exc.text
             return f"set files failed: {desc}", 400
         return quart.Response(build_tar({}), mimetype="application/x-tar")
 
-    # Focus et met le texte:
+    if text:
+        # Focus et insère le texte.
+        # NOTE: insert_text() émule ni le clavier ni le presse-papier, mais produit `isTrusted:true`
 
-    await _send(tab, cdp.dom.scroll_into_view_if_needed(
-        backend_node_id=h.backend_node_id), h.frame_sid)
-    await _send(tab, cdp.dom.focus(
-        backend_node_id=h.backend_node_id), h.frame_sid)
-    await _send(tab, cdp.input_.insert_text(text), h.frame_sid)
+        await _send(tab, cdp.dom.scroll_into_view_if_needed(
+            backend_node_id=h.backend_node_id), h.frame_sid)
+        await _send(tab, cdp.dom.focus(
+            backend_node_id=h.backend_node_id), h.frame_sid)
 
-    return quart.Response(build_tar({}), mimetype="application/x-tar")
+        await _send(tab, cdp.input_.insert_text(text), h.frame_sid)
 
+        return quart.Response(build_tar({}), mimetype="application/x-tar")
 
-@app.post("/select")
-async def select():
-    _touch()
+    if select_value:
+        # Focus et émet des events synthétique.
+        # TODO: `isTrusted:false`
 
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        sel = next(iter(load_selectors(req_tar).values()), None)
-        members = read_tar_dir(req_tar)
-    text = members.get("text", b"").decode("utf-8").rstrip("\n")
+        await _send(tab, cdp.dom.scroll_into_view_if_needed(
+            backend_node_id=h.backend_node_id), h.frame_sid)
+        await _send(tab, cdp.dom.focus(
+            backend_node_id=h.backend_node_id), h.frame_sid)
 
-    if not sel:
-        return "bad selector", 400
-
-    tab = await _tab()
-
-    # Éxécute la recherche
-    hits = await _search_selector(tab, sel, 1)
-    if not hits:
-        return "no match", 404
-    h = hits[0]
-
-    # Focus puis sélectionne l'option par son innerText. Events `input` et
-    # `change` synthétiques (isTrusted:false, assumé).
-
-    await _send(tab, cdp.dom.scroll_into_view_if_needed(
-        backend_node_id=h.backend_node_id), h.frame_sid)
-    await _send(tab, cdp.dom.focus(
-        backend_node_id=h.backend_node_id), h.frame_sid)
-
-    remote = await _send(tab, cdp.dom.resolve_node(
-        backend_node_id=h.backend_node_id), h.frame_sid)
-    result, exc = await _send(tab, cdp.runtime.call_function_on(
-        function_declaration="""function(text) {
-            for (const o of this.options) {
-                if (o.innerText === text) {
-                    this.value = o.value;
-                    this.dispatchEvent(new Event('input', {bubbles: true}));
-                    this.dispatchEvent(new Event('change', {bubbles: true}));
-                    return true;
+        remote = await _send(tab, cdp.dom.resolve_node(
+            backend_node_id=h.backend_node_id), h.frame_sid)
+        result, exc = await _send(tab, cdp.runtime.call_function_on(
+            function_declaration="""function(value) {
+                for (const opt of this.options) {
+                    // if (opt.innerText === text) {
+                    if (opt.value === value) {
+                        this.value = opt.value;
+                        this.dispatchEvent(new Event('input', {bubbles: true}));
+                        this.dispatchEvent(new Event('change', {bubbles: true}));
+                        return true;
+                    }
                 }
-            }
-            return false;
-        }""",
-        object_id=remote.object_id,
-        arguments=[cdp.runtime.CallArgument(value=text)],
-        return_by_value=True,
-    ), h.frame_sid)
+                return false;
+            }""",
+            object_id=remote.object_id,
+            arguments=[
+                cdp.runtime.CallArgument(value=select_value)
+            ],
+            return_by_value=True,
+        ), h.frame_sid)
+        if exc is not None:
+            raise RuntimeError(f"select callFunctionOn failed: {exc}")
 
-    if exc is not None:
-        raise RuntimeError(f"select callFunctionOn failed: {exc}")
-    if not result.value:
-        return "no option", 404
+        if not result.value:
+            return "option not found", 404
+        else:
+            return quart.Response(build_tar({}), mimetype="application/x-tar")
 
-    return quart.Response(build_tar({}), mimetype="application/x-tar")
+    return "no input provided", 400
 
 
 @app.post("/js")
@@ -524,30 +507,6 @@ async def snap():
     files["network_page.har"] = cyborg_har.drain_page_har()
 
     _touch()
-    return quart.Response(build_tar(files), mimetype="application/x-tar")
-
-
-@app.post("/cookie")
-async def cookie():
-    _touch()
-
-    with download_req_tar(await quart.request.get_data()) as req_tar:
-        members = read_tar_dir(req_tar)
-    url = members.get("url", b"").decode("utf-8").rstrip("\n")
-
-    tab = await _tab()
-
-    cookies = await tab.send(cdp.network.get_cookies(urls=[url]))
-    version = await tab.send(cdp.browser.get_version())
-
-    # Header `Cookie` tel que l'enverrait le client : `name=value; name2=value2`.
-    header = "; ".join(f"{c.name}={c.value}" for c in (cookies or []))
-    user_agent = version[3]
-
-    files = {
-        "cookie.txt": header.encode("utf-8"),
-        "user-agent.txt": user_agent.encode("utf-8"),
-    }
     return quart.Response(build_tar(files), mimetype="application/x-tar")
 
 

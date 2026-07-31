@@ -245,6 +245,19 @@ def build_tar(files: dict) -> bytes:
     return buf.getvalue()
 
 
+def tar_filter_dir(root: dict[str,bytes], prefix: str) -> dict[str,bytes]:
+    dst = {}
+    for name, body in root.items():
+        if name.startswith(prefix):
+            dst[name[len(prefix):]] = body
+    return dst
+
+
+def tar_member_text(root: dict[str, bytes], key: str) -> Optional[str]:
+    if key not in root:
+        return None
+    return root[key].decode("utf-8")
+
 # ── Frames + shadow walk (CDP-only) ───────────────────────────────────────────
 
 @dataclass
